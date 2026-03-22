@@ -1,0 +1,81 @@
+# ═══════════════════════════════════════════════════════════════
+# Archangel Anti-Fraud Pipeline — Centralized Configuration
+# ═══════════════════════════════════════════════════════════════
+
+pipeline:
+  seed: 42
+  log_level: INFO
+
+# ── Spark ETL ────────────────────────────────────────────────
+etl:
+  n_records: 50000
+  salt_factor: 32
+  hot_key_threshold: 1000
+  skew_ratio_alert: 5.0
+  n_partitions: 32
+
+# ── A/B Testing ──────────────────────────────────────────────
+ab_testing:
+  alpha: 0.05
+  min_power: 0.80
+  baseline_hit_rate: 0.673
+  target_lift_pp: 2.0
+  treatment_hit_rate: 0.697
+  control_fpr: 0.023
+  treatment_fpr: 0.021
+
+# ── Model Monitor ───────────────────────────────────────────
+model_monitor:
+  psi_stable_threshold: 0.10
+  psi_moderate_threshold: 0.25
+  latency_sla_ms: 50.0
+  hit_rate_floor: 0.65
+  fpr_ceiling: 0.05
+  simulation_days: 30
+
+# ── Guardian Score ──────────────────────────────────────────
+guardian_score:
+  instant_blacklist_threshold: 0.85
+  review_queue_threshold: 0.50
+  safe_threshold: 0.15
+  burst_window_sec: 300
+  burst_limit: 10
+  min_consensus: 3
+  bayesian_prior_alpha: 2.0
+  bayesian_prior_beta: 2.0
+
+# ── Data Refinement ─────────────────────────────────────────
+data_refinement:
+  smote_random_state: 42
+  cleanlab_n_folds: 5
+  noisy_label_percentile: 5
+  test_size: 0.2
+
+# ── XGBoost Classifier ─────────────────────────────────────
+classifier:
+  n_estimators: 100
+  max_depth: 6
+  learning_rate: 0.1
+  cv_folds: 5
+
+# ── FastAPI ─────────────────────────────────────────────────
+api:
+  host: "0.0.0.0"
+  port: 8000
+  workers: 4
+
+# ── Infrastructure (Docker Compose) ─────────────────────────
+infrastructure:
+  kafka:
+    bootstrap_servers: "kafka:29092"
+    topic: "call-events"
+  redis:
+    host: "redis"
+    port: 6379
+    maxmemory: "512mb"
+  mlflow:
+    tracking_uri: "http://mlflow:5000"
+  spark:
+    master_url: "spark://spark-master:7077"
+    worker_memory: "2G"
+    worker_cores: 2
