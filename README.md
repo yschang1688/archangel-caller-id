@@ -15,6 +15,9 @@
 
 An end-to-end **Data Engineering & Machine Learning pipeline** simulating a global anti-fraud intelligence platform. Built to demonstrate production-grade data engineering skills aligned with **Data-centric AI** principles — processing 1B+ call records with real-time scam detection, rigorous A/B testing, and automated model monitoring.
 
+> 來電事件資料 → 即時詐騙偵測 + PSI 漂移監控 + A/B 驗證的版本迭代；一條通用的設備資料閉環管線（設備數據回傳 → 異常偵測 → 版本迭代）。
+> Call-event data → real-time scam detection + PSI drift monitoring + A/B-validated model iteration. A generic device-data closed-loop pipeline (telemetry ingest → anomaly detection → versioned iteration).
+
 **Inspired by the architecture of cross-national telecom fraud detection systems.**
 
 ---
