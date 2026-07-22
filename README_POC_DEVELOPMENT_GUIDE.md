@@ -1,4 +1,4 @@
-# 防詐 DRE 面試：Python 實戰 POC 開發藍圖
+# 防詐來電辨識：Python 實戰 POC 開發藍圖
 
 本指南對應《全民瘋 AI 系列》教材，展現處理不平衡數據（Imbalanced Data）與模型解釋化（XAI）的專業即戰力。  
 已同步更新，完整涵蓋 **Archangel Intelligence System** 的所有已實作模組。
@@ -324,7 +324,7 @@ docker-compose up -d
 
 ## 階段六：Data Skew 處理（資料工程進階）
 
-> **📌 本階段為 ISL DRE 面試最高分項目之一**
+> **📌 本階段為資料工程能力的核心展示項目之一**
 
 **實作檔案：** `src/processing/spark_etl.py`
 
@@ -364,7 +364,7 @@ salted_key = f"{key}__salt_{salt}"
 
 ## 階段七：A/B 測試框架（實驗設計）
 
-> **📌 ISL 的核心工作流程：每次演算法升級都需要嚴謹的 A/B 實驗**
+> **📌 核心工作流程：每次演算法升級都需要嚴謹的 A/B 實驗**
 
 **實作檔案：** `src/ml/ab_testing.py`
 
@@ -405,7 +405,7 @@ print(f"顯著:      {hit_rate_result.is_significant}")
 
 ## 階段八：模型監控與閉環（MLOps）
 
-> **📌 對應 ISL 要求的「閉環監控」能力**
+> **📌 展示「閉環監控」能力**
 
 **實作檔案：** `src/monitoring/model_monitor.py`
 

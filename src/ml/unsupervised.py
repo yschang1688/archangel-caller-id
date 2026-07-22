@@ -18,7 +18,7 @@ Dataset:  fraud_100000_dataset.csv
             C_DEMO_TARGET  →  4k  targeted demo victims
             C_POISON_BOT   →  2k  bot accounts (filtered upstream)
 
-Role Target: Data Research Engineer @ Gogolook ISL
+Portfolio: Caller-ID & Anti-Fraud Data Platform
 """
 
 import numpy as np

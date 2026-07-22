@@ -3,7 +3,7 @@
 run_demo.py — Archangel Intelligence System: One-Click Pipeline Demo
 =====================================================================
 Executes all core modules sequentially with deterministic output.
-Designed for terminal presentation to ISL Data Research Engineer interview.
+Terminal-friendly demo of the end-to-end anti-fraud data pipeline.
 
 Usage:
     python run_demo.py          # Full demo (all 4 modules)
@@ -42,7 +42,7 @@ def print_banner():
     print("═" * 68)
     print("  🛡️  ARCHANGEL INTELLIGENCE SYSTEM — Full Pipeline Demo")
     print("  ─────────────────────────────────────────────────────────")
-    print("  Data-centric AI  |  Anti-Fraud  |  ISL Data Research Engineer")
+    print("  Data-centric AI  |  Anti-Fraud  |  Caller-ID Intelligence")
     print("  Deterministic seed: 42  |  All results are reproducible")
     print("═" * 68)
 

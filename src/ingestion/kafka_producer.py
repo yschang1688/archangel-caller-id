@@ -6,7 +6,7 @@ Generates realistic call event streams for pipeline ingestion.
 In production: publishes to Kafka topic 'call-events' via confluent_kafka.
 Here: simulates the event stream with configurable throughput.
 
-Role Target: Data Research Engineer @ Gogolook ISL
+Portfolio: Caller-ID & Anti-Fraud Data Platform
 """
 
 import json

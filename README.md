@@ -79,11 +79,11 @@ archangel/
 │   └── pipeline_config.yaml           # Centralized configuration
 ├── tests/
 │   └── test_guardian_score.py         # Unit tests
-├── notebooks/                          # EDA notebooks
+├── dataset_generator/                  # Synthetic dataset generators
 ├── run_demo.py                         # ⭐ One-click pipeline demo
 ├── docker-compose.yml                  # Full stack: Kafka+Spark+Redis+MLflow
 ├── Dockerfile
-├── fraud_1000_dataset.csv              # 10K sample dataset
+├── fraud_1000_dataset.csv              # 1K sample dataset (100K variant included)
 └── requirements.txt
 ```
 
@@ -93,8 +93,8 @@ archangel/
 
 ```bash
 # Clone & setup
-git clone https://github.com/yourname/archangel.git
-cd archangel
+git clone https://github.com/yschang1688/archangel-caller-id.git
+cd archangel-caller-id
 
 # Activate conda environment (Python 3.11)
 conda activate condaml
@@ -185,9 +185,9 @@ All results above are **reproducible** with `python run_demo.py`.
 
 ---
 
-## Alignment with ISL Data Research Engineer Role
+## Engineering Capabilities Demonstrated
 
-| JD Requirement | This Project |
+| Capability | This Project |
 |---|---|
 | Billion-scale data processing | Spark salting pipeline (scalable to 1B+) |
 | Data Skew handling | Salting: 101.76x → 2.21x in `spark_etl.py` |
@@ -196,9 +196,9 @@ All results above are **reproducible** with `python run_demo.py`.
 | Model monitoring & retraining | PSI drift → auto-retrain in `model_monitor.py` |
 | High-availability architecture | Docker Compose: Kafka + Spark + Redis + MLflow |
 | Anti-fraud domain understanding | Guardian Score + Hit Rate optimization |
-| Hit Rate 提升來電識別率 | Control 0.672 → Treatment 0.698 (+2.6pp) |
-| 閉環監控 | PSI 0.163 → CRITICAL → auto-retrain triggered |
-| 數據精煉 | SMOTE + cleanlab label correction pipeline |
+| Caller-ID hit-rate uplift | Control 0.672 → Treatment 0.698 (+2.6pp) |
+| Closed-loop monitoring | PSI 0.163 → CRITICAL → auto-retrain triggered |
+| Data refinement | SMOTE + cleanlab label correction pipeline |
 
 ---
 

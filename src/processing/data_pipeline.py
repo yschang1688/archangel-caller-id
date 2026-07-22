@@ -8,7 +8,7 @@ Supports TWO dataset schemas automatically:
   • fraud_1000_dataset.csv  — legacy schema (Tags, Transaction_Amount, Is_Fraud…)
   • fraud_100000_dataset.csv — production schema (Financial_Loss, Age_Group, Label…)
 
-Role Target: Data Research Engineer @ Gogolook ISL
+Portfolio: Caller-ID & Anti-Fraud Data Platform
 """
 
 import os

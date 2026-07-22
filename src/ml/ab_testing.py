@@ -7,13 +7,13 @@ Combines frequentist (p-value, confidence intervals) and Bayesian approaches.
 Primary metric: Hit Rate (Recall) — the fraction of actual scam calls blocked.
 Secondary: False Positive Rate, Guardian Score uplift.
 
-Key Design Principles (aligned with ISL Data-centric AI philosophy):
+Key Design Principles (aligned with Data-centric AI philosophy):
     - Effect Size reporting alongside p-values (avoid p-hacking)
     - Power analysis BEFORE running tests (prevent underpowered experiments)
     - Sequential testing support (no peeking problem)
     - Business-interpretable output for PM stakeholders
 
-Role Target: Data Research Engineer @ Gogolook ISL
+Portfolio: Caller-ID & Anti-Fraud Data Platform
 """
 
 import math
@@ -111,7 +111,7 @@ class PowerAnalyzer:
     Determines required sample size BEFORE running experiments.
     Prevents underpowered tests that produce inconclusive results.
 
-    ISL context: With 10M daily users, overpowering is easy but costly
+    Context: at 10M+ daily-user scale, overpowering is easy but costly
     (delayed rollout). Proper power analysis finds the minimum viable N.
     """
 

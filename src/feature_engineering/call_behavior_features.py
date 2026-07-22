@@ -10,7 +10,7 @@ Feature categories:
     4. Social graph (unique callees, reciprocity ratio)
     5. Report-based (report density, Guardian Score weighted reports)
 
-Role Target: Data Research Engineer @ Gogolook ISL
+Portfolio: Caller-ID & Anti-Fraud Data Platform
 """
 
 import math

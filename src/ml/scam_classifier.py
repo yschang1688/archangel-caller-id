@@ -9,7 +9,7 @@ Key additions vs. basic classifier:
   • Precision-Recall Curve (AUPRC) — correct metric for imbalanced data
   • joblib Pipeline serialization — production-ready model packaging
 
-Role Target: Data Research Engineer @ Gogolook ISL
+Portfolio: Caller-ID & Anti-Fraud Data Platform
 """
 
 import os

@@ -10,7 +10,7 @@ Core Design:
     - Anti-manipulation: device fingerprint + geo consistency checks
     - Bayesian update: new evidence continuously refines each user's score
 
-Role Target: Data Research Engineer @ Gogolook ISL
+Portfolio: Caller-ID & Anti-Fraud Data Platform
 """
 
 import math

@@ -4,10 +4,10 @@ data_refinement.py — Archangel Data-centric AI Refinement Pipeline
 Implements SMOTE oversampling + cleanlab label quality correction.
 
 This is the core "Data-centric AI" module — improving data quality
-rather than tuning model hyperparameters. Aligned with ISL philosophy
+rather than tuning model hyperparameters. Aligned with Data-centric AI philosophy
 of systematic dataset refinement over raw data accumulation.
 
-Role Target: Data Research Engineer @ Gogolook ISL
+Portfolio: Caller-ID & Anti-Fraud Data Platform
 """
 
 import numpy as np

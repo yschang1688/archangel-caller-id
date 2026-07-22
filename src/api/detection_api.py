@@ -10,7 +10,7 @@ Endpoints:
     GET  /api/v1/health    — Service health check
     GET  /api/v1/stats     — Pipeline statistics
 
-Role Target: Data Research Engineer @ Gogolook ISL
+Portfolio: Caller-ID & Anti-Fraud Data Platform
 """
 
 from fastapi import FastAPI, HTTPException
