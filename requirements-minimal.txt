@@ -1,0 +1,11 @@
+# Minimal dependencies to run the one-click demo:
+#   python run_demo.py
+# These 4 core modules (Spark-ETL simulation, A/B testing, drift monitor,
+# Guardian Score) reproduce every result in the README with seed=42.
+# Verified against numpy 1.24 / 2.4 and scipy 1.11 / 1.17.
+#
+# For the full pipeline (Spark, XGBoost, FastAPI, Kafka, Redis, MLflow, ...),
+# use requirements.txt instead.
+
+numpy>=1.24
+scipy>=1.11

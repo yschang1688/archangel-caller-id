@@ -115,7 +115,7 @@ git clone https://github.com/yschang1688/archangel-caller-id.git
 cd archangel-caller-id
 
 # Minimal deps — run_demo.py only needs numpy + scipy (no Spark/conda required)
-pip install numpy scipy
+pip install -r requirements-minimal.txt
 
 # (Optional) Full environment for all modules incl. Spark/XGBoost/FastAPI
 conda activate condaml      # or: pip install -r requirements.txt
