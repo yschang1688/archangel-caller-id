@@ -114,10 +114,13 @@ archangel/
 git clone https://github.com/yschang1688/archangel-caller-id.git
 cd archangel-caller-id
 
-# Activate conda environment (Python 3.11)
-conda activate condaml
+# Minimal deps — run_demo.py only needs numpy + scipy (no Spark/conda required)
+pip install numpy scipy
 
-# ⭐ One-click full pipeline demo
+# (Optional) Full environment for all modules incl. Spark/XGBoost/FastAPI
+conda activate condaml      # or: pip install -r requirements.txt
+
+# ⭐ One-click full pipeline demo — reproduces all README results (seed=42)
 python run_demo.py
 
 # Or run individual modules
