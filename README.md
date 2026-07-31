@@ -22,21 +22,6 @@ An end-to-end **Data Engineering & Machine Learning pipeline** simulating a glob
 
 ---
 
-## Why This Generalises — A Device-Data Closed Loop
-
-The caller-ID domain here is just one instance of a **generic device-data feedback loop**: *telemetry ingest → anomaly detection → versioned iteration*. The same pipeline maps directly onto industrial equipment such as a **tea-extraction machine (萃茶機) fleet**:
-
-| This repo (caller-ID) | Generic loop | Tea-machine analogy |
-|---|---|---|
-| Call / SMS event streaming (`kafka_producer.py`) | **Telemetry ingest** | Per-machine extraction telemetry (temp, flow, brew time) returned to cloud |
-| Scam / drift detection (`model_monitor.py`, PSI) | **Anomaly detection** | Out-of-spec batches & sensor drift flagged automatically |
-| A/B testing + auto-retrain (`ab_testing.py`) | **Versioned iteration** | Recipe / firmware version rollout, validated by controlled A/B before fleet-wide ship |
-| Guardian Score reputation (`guardian_score.py`) | **Weighted signal quality** | Per-machine reliability weighting for noisy field reports |
-
-> **遷移性（一句話）**：設備數據回傳 → 異常偵測 → 版本迭代。本專案以「來電辨識」為載體，展示一條可直接套用到萃茶機設備資料閉環的通用工程管線——偵測漂移、觸發修正、A/B 驗證後才全機隊上線。
-
----
-
 ## System Architecture
 
 ```
