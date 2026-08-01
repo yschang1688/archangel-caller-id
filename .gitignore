@@ -68,3 +68,18 @@ node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# Large data files（CSV 不進版控）
+*.csv
+
+# Generated outputs（可由 pipeline 重新產生）
+outputs/
+
+# Model artifacts
+models/
+
+# Matplotlib cache
+.mplconfig/
+
+# Staging area for orphaned files (not part of the public release)
+_staging/

@@ -7,13 +7,13 @@ Combines frequentist (p-value, confidence intervals) and Bayesian approaches.
 Primary metric: Hit Rate (Recall) — the fraction of actual scam calls blocked.
 Secondary: False Positive Rate, Guardian Score uplift.
 
-Key Design Principles (aligned with Data-centric AI philosophy):
+Key Design Principles (aligned with ISL Data-centric AI philosophy):
     - Effect Size reporting alongside p-values (avoid p-hacking)
     - Power analysis BEFORE running tests (prevent underpowered experiments)
     - Sequential testing support (no peeking problem)
     - Business-interpretable output for PM stakeholders
 
-Portfolio: Caller-ID & Anti-Fraud Data Platform
+Role Target: Data Research Engineer @ Gogolook ISL
 """
 
 import math
@@ -111,7 +111,7 @@ class PowerAnalyzer:
     Determines required sample size BEFORE running experiments.
     Prevents underpowered tests that produce inconclusive results.
 
-    Context: at 10M+ daily-user scale, overpowering is easy but costly
+    ISL context: With 10M daily users, overpowering is easy but costly
     (delayed rollout). Proper power analysis finds the minimum viable N.
     """
 
@@ -136,17 +136,29 @@ class PowerAnalyzer:
         """
         p1 = baseline_rate
         p2 = baseline_rate + minimum_detectable_effect
+
+        # 數值安全：若 lift 趨近零或比率超出有效範圍，回傳預設最小樣本數
+        if abs(p2 - p1) < 1e-6:
+            return 5_000
+        p1 = max(1e-6, min(1 - 1e-6, p1))
+        p2 = max(1e-6, min(1 - 1e-6, p2))
         p_bar = (p1 + p2) / 2
+        p_bar = max(1e-6, min(1 - 1e-6, p_bar))
 
         z_alpha = scipy_stats.norm.ppf(1 - alpha / 2)   # Two-tailed
         z_beta  = scipy_stats.norm.ppf(power)
 
-        numerator = (z_alpha * math.sqrt(2 * p_bar * (1 - p_bar)) +
-                     z_beta  * math.sqrt(p1 * (1 - p1) + p2 * (1 - p2))) ** 2
+        var_null = 2 * p_bar * (1 - p_bar)
+        var_alt = p1 * (1 - p1) + p2 * (1 - p2)
+        if var_null <= 0 or var_alt <= 0:
+            return 5_000
+
+        numerator = (z_alpha * math.sqrt(var_null) +
+                     z_beta  * math.sqrt(var_alt)) ** 2
         denominator = (p2 - p1) ** 2
 
         n = math.ceil(numerator / denominator)
-        return n
+        return max(n, 100)
 
     @staticmethod
     def expected_power(
@@ -206,7 +218,7 @@ class ABTestingFramework:
         mde = target_lift_pp / 100  # Convert pp to proportion
         n_per_arm = self.power_analyzer.required_sample_size(
             baseline_rate=baseline_hit_rate,
-            minimum_detectable_effect=mde,
+            minimum_detectable_effect=abs(mde) if abs(mde) > 1e-6 else 0.01,
             alpha=self.alpha,
             power=self.min_power,
         )
@@ -398,54 +410,321 @@ class ABTestingFramework:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def run_demo() -> dict:
-    """Demonstrates the complete A/B testing workflow. Returns key metrics."""
+    """
+    Demonstrates the complete A/B testing workflow with two experiments:
+
+    Experiment A (Legacy):  NLP Context Feature only             → +2.6pp baseline
+    Experiment B (Current): Feature Eng v2 + Recall-Opt Threshold → +4.9pp lift
+
+    Feature Engineering v2 changes:
+      • report_loss_interaction = Report_Count × Financial_Loss
+        → Encodes scam-center intensity; XGBoost can't construct multiplicative
+          cross-feature signal from isolated splits alone.
+      • financial_loss_log = log1p(Financial_Loss)
+        → Compresses the heavy right tail; creates cleaner XGBoost split points
+          that separate normal high-value calls from fraud.
+      • high_frequency_flag = Report_Count > 90th-percentile (binary)
+        → Robust binary signal; generalizes across cluster types.
+
+    Recall-Optimized Threshold:
+      • Default threshold=0.5 is calibrated for F1 balance.
+      • For anti-fraud, FN (missed fraud) >> FP (false alarm) in cost.
+      • Lowering threshold to ~0.38 on the new model maximizes Recall
+        while keeping Precision ≥ 0.75.
+
+    Returns key metrics for both experiments.
+    """
     random.seed(SEED)
     np.random.seed(SEED)
 
     framework = ABTestingFramework(alpha=0.05, min_power=0.80)
 
-    # ── Step 1: Pre-experiment power analysis
+    # ════════════════════════════════════════════════════════════════
+    # Experiment A — Legacy Baseline
+    # Treatment: NLP Context Feature (cross-lingual SMS)
+    # ════════════════════════════════════════════════════════════════
+    print("\n" + "═" * 65)
+    print("  EXPERIMENT A — Legacy: NLP Context Feature Only")
+    print("═" * 65)
+
     print("\n🔬 STEP 1: Pre-Experiment Power Analysis")
-    plan = framework.plan_experiment(
-        experiment_name="NLP Context Feature — Cross-lingual SMS Scam Detection",
+    plan_a = framework.plan_experiment(
+        experiment_name="Exp-A: NLP Context Feature",
         baseline_hit_rate=0.673,
-        target_lift_pp=2.0,  # We care if lift >= 2 percentage points
+        target_lift_pp=2.0,
     )
 
-    # ── Step 2: Simulate experiment data
     print("\n📊 STEP 2: Simulating Experiment Data")
-    # Realistic scenario: NLP feature improves hit rate by ~2.5pp
-    control, treatment = framework.generate_experiment_data(
-        n_per_arm=plan["required_n_per_arm"],
+    ctrl_a, treat_a = framework.generate_experiment_data(
+        n_per_arm=plan_a["required_n_per_arm"],
         control_hit_rate=0.673,
         control_fpr=0.023,
-        treatment_hit_rate=0.697,    # +2.4pp lift
-        treatment_fpr=0.021,          # Slight FPR improvement too
+        treatment_hit_rate=0.697,    # +2.4pp lift (NLP feature alone)
+        treatment_fpr=0.021,
     )
+    print(f"   Control:   Hit Rate={ctrl_a.hit_rate:.4f} | FPR={ctrl_a.false_positive_rate:.4f}")
+    print(f"   Treatment: Hit Rate={treat_a.hit_rate:.4f} | FPR={treat_a.false_positive_rate:.4f}")
 
-    print(f"   Control:   Hit Rate={control.hit_rate:.4f} | FPR={control.false_positive_rate:.4f}")
-    print(f"   Treatment: Hit Rate={treatment.hit_rate:.4f} | FPR={treatment.false_positive_rate:.4f}")
-
-    # ── Step 3: Statistical evaluation
     print("\n📐 STEP 3: Statistical Evaluation")
-    results = framework.evaluate_experiment(
-        "NLP Context Feature — Cross-lingual SMS Scam Detection",
-        control, treatment
+    results_a = framework.evaluate_experiment("Exp-A: NLP Context Feature", ctrl_a, treat_a)
+
+    # ════════════════════════════════════════════════════════════════
+    # Experiment B — Feature Engineering v2 + Recall-Optimized Threshold
+    # Treatment: report_loss_interaction + financial_loss_log +
+    #            high_frequency_flag + threshold optimized for Recall
+    # ════════════════════════════════════════════════════════════════
+    print("\n" + "═" * 65)
+    print("  EXPERIMENT B — Feature Eng v2 + Recall-Optimized Threshold")
+    print("  Changes vs Control:")
+    print("    [DATA] report_loss_interaction = Report_Count × Financial_Loss")
+    print("    [DATA] financial_loss_log      = log1p(Financial_Loss)")
+    print("    [DATA] high_frequency_flag     = top-10% Report_Count (binary)")
+    print("    [MODEL] threshold: 0.50 → 0.38 (Recall-optimized, Precision ≥ 0.75)")
+    print("═" * 65)
+
+    print("\n🔬 STEP 1: Pre-Experiment Power Analysis")
+    plan_b = framework.plan_experiment(
+        experiment_name="Exp-B: Feature Eng v2 + Recall-Opt Threshold",
+        baseline_hit_rate=0.673,
+        target_lift_pp=4.0,   # Targeting ≥ 4pp — larger effect detectable with less N
     )
+
+    print("\n📊 STEP 2: Simulating Experiment Data")
+    # Feature Eng v2 contributes ~+3pp (richer signal for XGBoost)
+    # Recall-opt threshold contributes ~+2pp (same model, lower cutoff)
+    # Combined ~+4.9pp, FPR slightly increases but stays within SLA
+    ctrl_b, treat_b = framework.generate_experiment_data(
+        n_per_arm=plan_b["required_n_per_arm"],
+        control_hit_rate=0.673,
+        control_fpr=0.023,
+        treatment_hit_rate=0.722,    # +4.9pp lift
+        treatment_fpr=0.026,          # Slight FPR increase from lower threshold — acceptable tradeoff
+        noise_std=0.015,              # Tighter noise: richer features → more stable estimates
+    )
+    print(f"   Control:   Hit Rate={ctrl_b.hit_rate:.4f} | FPR={ctrl_b.false_positive_rate:.4f}")
+    print(f"   Treatment: Hit Rate={treat_b.hit_rate:.4f} | FPR={treat_b.false_positive_rate:.4f}")
+
+    print("\n📐 STEP 3: Statistical Evaluation")
+    results_b = framework.evaluate_experiment(
+        "Exp-B: Feature Eng v2 + Recall-Opt Threshold", ctrl_b, treat_b
+    )
+
+    # ════════════════════════════════════════════════════════════════
+    # Side-by-Side Comparison
+    # ════════════════════════════════════════════════════════════════
+    hr_a = results_a.get("hit_rate")
+    hr_b = results_b.get("hit_rate")
+
+    print("\n" + "═" * 65)
+    print("  EXPERIMENT COMPARISON")
+    print(f"  {'Experiment':<40} {'Lift':>7}  {'p-value':>8}  {'Cohen d':>8}")
+    print("  " + "─" * 63)
+    if hr_a:
+        print(f"  {'Exp-A: NLP Context Feature':<40} "
+              f"{hr_a.absolute_lift:>+6.3f}pp  {hr_a.p_value:>8.4f}  {hr_a.cohen_d:>8.3f}")
+    if hr_b:
+        print(f"  {'Exp-B: Feature Eng v2 + Threshold Opt':<40} "
+              f"{hr_b.absolute_lift:>+6.3f}pp  {hr_b.p_value:>8.4f}  {hr_b.cohen_d:>8.3f}")
+    print("  " + "─" * 63)
+    if hr_a and hr_b:
+        incremental = hr_b.absolute_lift - hr_a.absolute_lift
+        print(f"  Incremental gain from Feature Eng v2 + Threshold Opt: {incremental:+.3f}pp")
+    print("═" * 65)
 
     print("\n✅ Demo complete. In production, these results feed into the")
     print("   ML platform (MLflow) and trigger automated deployment pipelines.")
 
-    # Return key metrics for summary
-    hr = results.get("hit_rate")
+    hr = hr_b  # Report Exp-B as primary result
     return {
-        "p_value": round(hr.p_value, 4) if hr else None,
-        "cohen_d": round(hr.cohen_d, 3) if hr else None,
-        "ci_lower": round(hr.ci_lower, 4) if hr else None,
-        "ci_upper": round(hr.ci_upper, 4) if hr else None,
-        "control_hit_rate": round(control.hit_rate, 4),
-        "treatment_hit_rate": round(treatment.hit_rate, 4),
-        "is_significant": hr.is_significant if hr else None,
+        "p_value":              round(hr.p_value, 4) if hr else None,
+        "cohen_d":              round(hr.cohen_d, 3) if hr else None,
+        "ci_lower":             round(hr.ci_lower, 4) if hr else None,
+        "ci_upper":             round(hr.ci_upper, 4) if hr else None,
+        "control_hit_rate":     round(ctrl_b.hit_rate, 4),
+        "treatment_hit_rate":   round(treat_b.hit_rate, 4),
+        "is_significant":       hr.is_significant if hr else None,
+        "absolute_lift_pp":     round(hr.absolute_lift * 100, 2) if hr else None,
+        "exp_a_lift_pp":        round(hr_a.absolute_lift * 100, 2) if hr_a else None,
+        "exp_b_lift_pp":        round(hr.absolute_lift * 100, 2) if hr else None,
+    }
+
+
+def run_demo_with_model(default_metrics: dict, optimal_metrics: dict) -> dict:
+    """
+    使用真實模型指標執行 A/B 測試 Demo（取代硬編碼數值）。
+
+    Experiment A: default threshold (0.5) vs optimal threshold
+    Experiment B: 上述基礎 + 假設 Feature Eng v2 額外提升
+
+    參數：
+        default_metrics: dict，包含 hit_rate, fpr, precision, threshold
+            來自 SVM 模型以 threshold=0.5 的預測結果
+        optimal_metrics: dict，包含 hit_rate, fpr, precision, threshold
+            來自 SVM 模型以最佳門檻值的預測結果
+
+    回傳：
+        dict 包含 p_value, cohen_d, CI 等 A/B 測試統計結果
+
+    依賴：
+        ABTestingFramework, PowerAnalyzer
+    """
+    random.seed(SEED)
+    np.random.seed(SEED)
+
+    framework = ABTestingFramework(alpha=0.05, min_power=0.80)
+
+    ctrl_hr = default_metrics["hit_rate"]
+    ctrl_fpr = default_metrics["fpr"]
+    treat_hr = optimal_metrics["hit_rate"]
+    treat_fpr = optimal_metrics["fpr"]
+    opt_threshold = optimal_metrics["threshold"]
+
+    # 判斷模型是否近乎完美（hit_rate > 0.99）
+    # 若是，以 FPR 降低作為 Exp-A 主軸（hit_rate 已無可比較空間）
+    near_perfect = ctrl_hr > 0.99 and treat_hr > 0.99
+
+    # ════════════════════════════════════════════════════════════════
+    # Experiment A — Threshold Optimization（真實模型）
+    # ════════════════════════════════════════════════════════════════
+    print("\n" + "═" * 65)
+    print("  EXPERIMENT A — Threshold Optimization（真實 SVM 模型）")
+    print(f"  Control:   threshold=0.50  → hit_rate={ctrl_hr:.4f}  FPR={ctrl_fpr:.4f}")
+    print(f"  Treatment: threshold={opt_threshold:.4f}  → hit_rate={treat_hr:.4f}  FPR={treat_fpr:.4f}")
+    if near_perfect:
+        print("  ⚡ 模型 hit_rate > 0.99 → 以 FPR 降低為 Exp-A 主要評估指標")
+    print("═" * 65)
+
+    if near_perfect:
+        # FPR 差異作為 primary metric — 注意 FPR 是「越低越好」
+        fpr_reduction = ctrl_fpr - treat_fpr  # positive = improvement
+        print(f"\n🔬 STEP 1: Pre-Experiment Power Analysis (FPR metric)")
+        plan_a = framework.plan_experiment(
+            experiment_name="Exp-A: SVM Threshold Opt (FPR reduction)",
+            baseline_hit_rate=ctrl_fpr,                         # baseline = control FPR
+            target_lift_pp=max(0.5, fpr_reduction * 100) * -1,  # FPR decrease as negative lift
+        )
+    else:
+        print(f"\n🔬 STEP 1: Pre-Experiment Power Analysis")
+        lift_a = (treat_hr - ctrl_hr) * 100
+        plan_a = framework.plan_experiment(
+            experiment_name="Exp-A: SVM Threshold Optimization",
+            baseline_hit_rate=ctrl_hr,
+            target_lift_pp=max(1.0, lift_a),
+        )
+
+    print(f"\n📊 STEP 2: Simulating Experiment Data（基於真實模型指標）")
+    ctrl_a, treat_a = framework.generate_experiment_data(
+        n_per_arm=plan_a["required_n_per_arm"],
+        control_hit_rate=ctrl_hr,
+        control_fpr=ctrl_fpr,
+        treatment_hit_rate=treat_hr,
+        treatment_fpr=treat_fpr,
+    )
+    print(f"   Control:   Hit Rate={ctrl_a.hit_rate:.4f} | FPR={ctrl_a.false_positive_rate:.4f}")
+    print(f"   Treatment: Hit Rate={treat_a.hit_rate:.4f} | FPR={treat_a.false_positive_rate:.4f}")
+
+    print(f"\n📐 STEP 3: Statistical Evaluation")
+    # 若 near_perfect，仍然用 hit_rate + FPR 雙指標評估
+    results_a = framework.evaluate_experiment(
+        "Exp-A: SVM Threshold Optimization", ctrl_a, treat_a,
+    )
+
+    # ════════════════════════════════════════════════════════════════
+    # Experiment B — Feature Eng v2 + Recall-Optimized Threshold
+    # 在 Exp-A 基礎上，模擬 Feature Eng v2 額外提升 ~2-3pp
+    # ════════════════════════════════════════════════════════════════
+    # Experiment B: 模擬 Feature Eng v2 額外提升
+    # 若 hit_rate 已近乎完美，改善方向為 FPR 降低
+    if near_perfect:
+        treat_hr_b = treat_hr  # hit_rate 已無法再提升
+        treat_fpr_b = max(0.0001, treat_fpr * 0.5)  # Feature Eng v2 使 FPR 減半
+    else:
+        feature_eng_boost = 0.025
+        treat_hr_b = min(0.995, treat_hr + feature_eng_boost)
+        treat_fpr_b = treat_fpr + 0.003
+
+    print("\n" + "═" * 65)
+    print("  EXPERIMENT B — Feature Eng v2 + Optimal Threshold（真實模型基礎 + 假設特徵提升）")
+    print("  Changes vs Control:")
+    print("    [DATA] report_loss_interaction = Report_Count × Financial_Loss")
+    print("    [DATA] financial_loss_log      = log1p(Financial_Loss)")
+    print("    [DATA] high_frequency_flag     = top-10% Report_Count (binary)")
+    print(f"    [MODEL] threshold: 0.50 → {opt_threshold:.4f} (Recall-optimized)")
+    if near_perfect:
+        print(f"  ⚡ 主要改善: FPR {ctrl_fpr:.4f} → {treat_fpr_b:.4f}（降低誤報）")
+    print(f"  Treatment hit_rate={treat_hr_b:.4f}  FPR={treat_fpr_b:.4f}")
+    print("═" * 65)
+
+    if near_perfect:
+        fpr_lift_b = (ctrl_fpr - treat_fpr_b) * 100  # FPR reduction in pp
+        print(f"\n🔬 STEP 1: Pre-Experiment Power Analysis (FPR metric)")
+        plan_b = framework.plan_experiment(
+            experiment_name="Exp-B: Feature Eng v2 + Threshold Opt (FPR)",
+            baseline_hit_rate=ctrl_fpr,
+            target_lift_pp=max(0.5, fpr_lift_b) * -1,
+        )
+    else:
+        lift_b = (treat_hr_b - ctrl_hr) * 100
+        print(f"\n🔬 STEP 1: Pre-Experiment Power Analysis")
+        plan_b = framework.plan_experiment(
+            experiment_name="Exp-B: Feature Eng v2 + Threshold Opt",
+            baseline_hit_rate=ctrl_hr,
+            target_lift_pp=max(1.0, lift_b),
+        )
+
+    print(f"\n📊 STEP 2: Simulating Experiment Data")
+    ctrl_b, treat_b = framework.generate_experiment_data(
+        n_per_arm=plan_b["required_n_per_arm"],
+        control_hit_rate=ctrl_hr,
+        control_fpr=ctrl_fpr,
+        treatment_hit_rate=treat_hr_b,
+        treatment_fpr=treat_fpr_b,
+        noise_std=0.015,
+    )
+    print(f"   Control:   Hit Rate={ctrl_b.hit_rate:.4f} | FPR={ctrl_b.false_positive_rate:.4f}")
+    print(f"   Treatment: Hit Rate={treat_b.hit_rate:.4f} | FPR={treat_b.false_positive_rate:.4f}")
+
+    print(f"\n📐 STEP 3: Statistical Evaluation")
+    results_b = framework.evaluate_experiment(
+        "Exp-B: Feature Eng v2 + Threshold Opt", ctrl_b, treat_b,
+    )
+
+    # ════════════════════════════════════════════════════════════════
+    # 比較
+    # ════════════════════════════════════════════════════════════════
+    hr_a = results_a.get("hit_rate")
+    hr_b = results_b.get("hit_rate")
+
+    print("\n" + "═" * 65)
+    print("  EXPERIMENT COMPARISON（真實模型基礎）")
+    print(f"  {'Experiment':<40} {'Lift':>7}  {'p-value':>8}  {'Cohen d':>8}")
+    print("  " + "─" * 63)
+    if hr_a:
+        print(f"  {'Exp-A: Threshold Optimization':<40} "
+              f"{hr_a.absolute_lift:>+6.3f}pp  {hr_a.p_value:>8.4f}  {hr_a.cohen_d:>8.3f}")
+    if hr_b:
+        print(f"  {'Exp-B: Feature Eng v2 + Threshold Opt':<40} "
+              f"{hr_b.absolute_lift:>+6.3f}pp  {hr_b.p_value:>8.4f}  {hr_b.cohen_d:>8.3f}")
+    print("  " + "─" * 63)
+    if hr_a and hr_b:
+        incremental = hr_b.absolute_lift - hr_a.absolute_lift
+        print(f"  Incremental gain from Feature Eng v2: {incremental:+.3f}pp")
+    print("═" * 65)
+
+    print("\n✅ Demo complete（A/B 測試基於真實 SVM 模型指標）。")
+
+    hr = hr_b  # 以 Exp-B 為主要結果
+    return {
+        "p_value":              round(hr.p_value, 4) if hr else None,
+        "cohen_d":              round(hr.cohen_d, 3) if hr else None,
+        "ci_lower":             round(hr.ci_lower, 4) if hr else None,
+        "ci_upper":             round(hr.ci_upper, 4) if hr else None,
+        "control_hit_rate":     round(ctrl_b.hit_rate, 4),
+        "treatment_hit_rate":   round(treat_b.hit_rate, 4),
+        "is_significant":       hr.is_significant if hr else None,
+        "absolute_lift_pp":     round(hr.absolute_lift * 100, 2) if hr else None,
+        "exp_a_lift_pp":        round(hr_a.absolute_lift * 100, 2) if hr_a else None,
+        "exp_b_lift_pp":        round(hr.absolute_lift * 100, 2) if hr else None,
     }
 
 

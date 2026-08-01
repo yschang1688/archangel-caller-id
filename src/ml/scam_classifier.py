@@ -9,7 +9,7 @@ Key additions vs. basic classifier:
   • Precision-Recall Curve (AUPRC) — correct metric for imbalanced data
   • joblib Pipeline serialization — production-ready model packaging
 
-Portfolio: Caller-ID & Anti-Fraud Data Platform
+Role Target: Data Research Engineer @ Gogolook ISL
 """
 
 import os
@@ -27,7 +27,11 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import GridSearchCV
 from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC
 import xgboost as xgb
 import logging
 
@@ -42,7 +46,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger(__name__)
 
 SEED = 42
-MODEL_SAVE_PATH = "models/xgboost_fraud_pipeline.pkl"
+MODEL_SAVE_PATH = "models/xgboost_spam_model.pkl"
 
 # Matplotlib 中文支援
 plt.rcParams['font.sans-serif'] = ['Arial Unicode MS', 'Microsoft JhengHei', 'SimHei']
@@ -238,6 +242,104 @@ def plot_precision_recall_curve(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Recall-Optimized Threshold  (Hit Rate maximization for A/B Treatment)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def find_recall_optimized_threshold(
+    model,
+    X_val: pd.DataFrame,
+    y_val: pd.Series,
+    min_precision: float = 0.75,
+) -> tuple:
+    """
+    Find the decision threshold that maximizes Recall while maintaining
+    minimum Precision — the correct optimization objective for anti-fraud systems.
+
+    Why shift below 0.5?
+        Default threshold=0.5 is optimized for balanced F1.
+        In anti-fraud, missing a fraud (FN) costs users real money;
+        a false alarm (FP) is annoying but recoverable.
+        Lowering the threshold captures more true fraud cases (higher Recall/Hit Rate)
+        at the cost of slightly more false positives — a better business tradeoff.
+
+    Design:
+        1. Compute the full Precision-Recall curve from predicted probabilities
+        2. Filter to all thresholds where Precision >= min_precision
+        3. Among those, pick the threshold with the highest Recall
+
+    Args:
+        model:          Trained classifier with predict_proba()
+        X_val:          Validation feature matrix
+        y_val:          True binary labels
+        min_precision:  Minimum acceptable precision (default: 0.75 for anti-fraud;
+                        tighten to 0.85 if false positives are costly)
+
+    Returns:
+        (optimal_threshold, recall_at_threshold, precision_at_threshold)
+    """
+    y_proba = model.predict_proba(X_val)[:, 1]
+    # precision_recall_curve returns arrays of len = len(thresholds) + 1
+    # The last point is always (precision=1.0, recall=0.0), drop it for threshold matching
+    precisions, recalls, thresholds = precision_recall_curve(y_val, y_proba)
+    precisions = precisions[:-1]
+    recalls = recalls[:-1]
+
+    valid_mask = precisions >= min_precision
+    if not valid_mask.any():
+        logger.warning(
+            f"   No threshold achieves precision >= {min_precision:.2f}. "
+            f"Falling back to threshold=0.5."
+        )
+        idx_05 = np.argmin(np.abs(thresholds - 0.5))
+        return 0.5, float(recalls[idx_05]), float(precisions[idx_05])
+
+    # Max recall among precision-constrained thresholds
+    best_rel_idx = int(np.argmax(recalls[valid_mask]))
+    optimal_threshold = float(thresholds[valid_mask][best_rel_idx])
+    optimal_recall    = float(recalls[valid_mask][best_rel_idx])
+    optimal_precision = float(precisions[valid_mask][best_rel_idx])
+
+    print(
+        f"\n[Recall-Opt Threshold] min_precision={min_precision:.2f}\n"
+        f"   Optimal threshold : {optimal_threshold:.4f}  (vs default 0.5)\n"
+        f"   Recall (Hit Rate) : {optimal_recall:.4f}\n"
+        f"   Precision         : {optimal_precision:.4f}"
+    )
+    return optimal_threshold, optimal_recall, optimal_precision
+
+
+def evaluate_with_optimal_threshold(
+    model,
+    X_test: pd.DataFrame,
+    y_test: pd.Series,
+    threshold: float,
+) -> dict:
+    """
+    Re-evaluate model using a recall-optimized threshold instead of 0.5.
+
+    Returns dict with recall, precision, f1 at the new threshold.
+    """
+    y_proba = model.predict_proba(X_test)[:, 1]
+    y_pred_opt = (y_proba >= threshold).astype(int)
+
+    from sklearn.metrics import recall_score, precision_score
+    rec  = recall_score(y_test, y_pred_opt)
+    prec = precision_score(y_test, y_pred_opt, zero_division=0)
+    f1   = f1_score(y_test, y_pred_opt)
+
+    print(
+        f"\n[Threshold={threshold:.4f}] "
+        f"Recall={rec:.4f}  Precision={prec:.4f}  F1={f1:.4f}"
+    )
+    return {
+        "threshold": round(threshold, 4),
+        "recall":    round(rec, 4),
+        "precision": round(prec, 4),
+        "f1":        round(f1, 4),
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Feature Importance Plot  (legacy / quick view)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -293,5 +395,276 @@ def load_model(load_path: str = MODEL_SAVE_PATH) -> xgb.XGBClassifier:
     return model
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Confusion Matrix  (poc-ml.mdc §9.3)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def plot_confusion_matrix(
+    y_test: pd.Series,
+    y_pred: np.ndarray,
+    labels: list[str] = None,
+    save_path: str = "confusion_matrix.png",
+) -> np.ndarray:
+    """
+    Plot annotated confusion matrix heatmap.
+
+    Returns:
+        cm (np.ndarray): The confusion matrix
+    """
+    if labels is None:
+        labels = ["正常(0)", "詐騙(1)"]
+
+    cm = confusion_matrix(y_test, y_pred)
+
+    fig, ax = plt.subplots(figsize=(7, 6))
+    sns.heatmap(cm, annot=True, fmt="d", cmap="Blues",
+                xticklabels=labels, yticklabels=labels,
+                linewidths=1, linecolor='white', ax=ax,
+                annot_kws={"size": 16})
+    ax.set_xlabel("預測標籤", fontsize=12)
+    ax.set_ylabel("真實標籤", fontsize=12)
+    ax.set_title("Confusion Matrix — 防詐模型", fontsize=14, fontweight='bold')
+
+    # Annotate rates
+    tn, fp, fn, tp = cm.ravel()
+    total = cm.sum()
+    text = (f"TP={tp}  FP={fp}  FN={fn}  TN={tn}\n"
+            f"Precision={tp/(tp+fp):.3f}  Recall={tp/(tp+fn):.3f}")
+    ax.text(0.5, -0.15, text, transform=ax.transAxes, ha='center', fontsize=10)
+
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"[Confusion Matrix] 已儲存: {save_path}")
+    return cm
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Overfitting Check  (poc-ml.mdc §9.1)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def check_overfitting(
+    model,
+    X_train: pd.DataFrame, y_train: pd.Series,
+    X_test: pd.DataFrame, y_test: pd.Series,
+    threshold: float = 0.10,
+) -> dict:
+    """
+    Compare training vs test F1 to detect overfitting.
+
+    poc-ml.mdc requirement: train-test F1 gap < 0.10.
+
+    Returns:
+        dict with train_f1, test_f1, gap, is_overfitting flag
+    """
+    train_f1 = f1_score(y_train, model.predict(X_train))
+    test_f1 = f1_score(y_test, model.predict(X_test))
+    gap = train_f1 - test_f1
+
+    status = "過擬合 ⚠️" if gap > threshold else "正常 ✅"
+    if test_f1 < 0.5 and train_f1 < 0.5:
+        status = "欠擬合 ⚠️"
+
+    print(f"\n[Overfitting Check]")
+    print(f"  Train F1: {train_f1:.4f}")
+    print(f"  Test F1:  {test_f1:.4f}")
+    print(f"  Gap:      {gap:+.4f}  (門檻: {threshold})")
+    print(f"  判定:     {status}")
+
+    return {
+        "train_f1": round(train_f1, 4),
+        "test_f1": round(test_f1, 4),
+        "gap": round(gap, 4),
+        "is_overfitting": gap > threshold,
+        "status": status,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Multi-Model Comparison  (poc-ml.mdc §3-8)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def train_multiple_models(
+    X: pd.DataFrame,
+    y: pd.Series,
+    run_grid_search: bool = False,
+    run_grid_search_xgb: bool = False,
+    run_grid_search_svm: bool = False,
+) -> dict:
+    """
+    Train and compare LR, XGBoost, RandomForest, and SVM (RBF).
+
+    Returns:
+        dict with models, metrics, and best_model reference
+    """
+    np.random.seed(SEED)
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=SEED, stratify=y
+    )
+
+    pos_weight = (y_train == 0).sum() / (y_train == 1).sum()
+    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=SEED)
+
+    models = {
+        "LogisticRegression": LogisticRegression(random_state=SEED, max_iter=1000),
+        "XGBoost": xgb.XGBClassifier(
+            n_estimators=100, max_depth=6, learning_rate=0.1,
+            scale_pos_weight=pos_weight, eval_metric='logloss',
+            random_state=SEED,
+        ),
+        "RandomForest": RandomForestClassifier(
+            n_estimators=100, max_depth=10,
+            class_weight='balanced', random_state=SEED, n_jobs=-1,
+        ),
+        "SVM (RBF)": Pipeline([
+            ("scaler", StandardScaler()),
+            ("svm", SVC(
+                kernel="rbf",
+                probability=True,
+                class_weight="balanced",
+                random_state=SEED,
+                cache_size=500,
+            )),
+        ]),
+    }
+
+    print("\n" + "═" * 60)
+    print("  多模型比較 — LR / XGBoost / RandomForest / SVM")
+    print("═" * 60)
+
+    results = {}
+    import time as _time
+
+    for name, model in models.items():
+        t0 = _time.perf_counter()
+        model.fit(X_train, y_train)
+        train_time = _time.perf_counter() - t0
+
+        y_pred = model.predict(X_test)
+        y_proba = model.predict_proba(X_test)[:, 1]
+        test_f1 = f1_score(y_test, y_pred)
+        auprc = average_precision_score(y_test, y_proba)
+        roc = roc_auc_score(y_test, y_proba)
+
+        cv_scores = cross_val_score(model, X, y, cv=skf, scoring='f1')
+
+        results[name] = {
+            "model": model,
+            "test_f1": round(test_f1, 4),
+            "auprc": round(auprc, 4),
+            "roc_auc": round(roc, 4),
+            "cv_f1_mean": round(cv_scores.mean(), 4),
+            "cv_f1_std": round(cv_scores.std(), 4),
+            "train_time_sec": round(train_time, 2),
+            "_X_train": X_train, "_X_test": X_test,
+            "_y_train": y_train, "_y_test": y_test,
+            "_y_pred": y_pred, "_y_proba": y_proba,
+        }
+
+        print(f"\n  ▸ {name}")
+        print(f"    Test F1: {test_f1:.4f}  |  AUPRC: {auprc:.4f}  |  ROC-AUC: {roc:.4f}")
+        print(f"    5-Fold CV F1: {cv_scores.mean():.4f} (±{cv_scores.std()*2:.4f})")
+        print(f"    訓練時間: {train_time:.2f}s")
+
+    # ── Optional GridSearchCV on best model ────────────────────────
+    do_xgb_gs = bool(run_grid_search or run_grid_search_xgb)
+    if do_xgb_gs:
+        print("\n  ⚙️ GridSearchCV on XGBoost...")
+        param_grid = {
+            'max_depth': [4, 6, 8],
+            'n_estimators': [50, 100, 200],
+            'learning_rate': [0.05, 0.1, 0.2],
+        }
+        gs = GridSearchCV(
+            xgb.XGBClassifier(
+                scale_pos_weight=pos_weight,
+                eval_metric='logloss', random_state=SEED,
+            ),
+            param_grid, cv=skf, scoring='f1',
+            n_jobs=-1, verbose=0,
+        )
+        gs.fit(X_train, y_train)
+        gs_pred = gs.predict(X_test)
+        gs_f1 = f1_score(y_test, gs_pred)
+        gs_proba = gs.predict_proba(X_test)[:, 1]
+
+        results["XGBoost_tuned"] = {
+            "model": gs.best_estimator_,
+            "test_f1": round(gs_f1, 4),
+            "auprc": round(average_precision_score(y_test, gs_proba), 4),
+            "roc_auc": round(roc_auc_score(y_test, gs_proba), 4),
+            "best_params": gs.best_params_,
+            "_X_train": X_train, "_X_test": X_test,
+            "_y_train": y_train, "_y_test": y_test,
+            "_y_pred": gs_pred, "_y_proba": gs_proba,
+        }
+        print(f"    Best params: {gs.best_params_}")
+        print(f"    Tuned F1: {gs_f1:.4f}")
+
+    do_svm_gs = bool(run_grid_search or run_grid_search_svm)
+    if do_svm_gs:
+        print("\n  ⚙️ GridSearchCV on SVM (Pipeline: StandardScaler + SVC[RBF])...")
+        from sklearn.pipeline import Pipeline as _Pipeline
+        from sklearn.preprocessing import StandardScaler as _SS
+        from sklearn.svm import SVC as _SVC
+        svm_pipe = _Pipeline([
+            ("scaler", _SS()),
+            ("svm", _SVC(
+                probability=True,
+                class_weight="balanced",
+                random_state=SEED,
+                cache_size=500,
+            )),
+        ])
+        svm_param_grid = {
+            "svm__kernel": ["rbf"],
+            "svm__C": [0.1, 1, 10, 100],
+            "svm__gamma": ["scale", "auto", 0.01, 0.1],
+        }
+        svm_gs = GridSearchCV(
+            svm_pipe,
+            svm_param_grid,
+            cv=skf,
+            scoring="f1",
+            n_jobs=-1,
+            verbose=0,
+        )
+        svm_gs.fit(X_train, y_train)
+        svm_pred = svm_gs.predict(X_test)
+        svm_f1 = f1_score(y_test, svm_pred)
+        svm_proba = svm_gs.predict_proba(X_test)[:, 1]
+
+        results["SVM_tuned"] = {
+            "model": svm_gs.best_estimator_,
+            "test_f1": round(svm_f1, 4),
+            "auprc": round(average_precision_score(y_test, svm_proba), 4),
+            "roc_auc": round(roc_auc_score(y_test, svm_proba), 4),
+            "best_params": svm_gs.best_params_,
+            "_X_train": X_train, "_X_test": X_test,
+            "_y_train": y_train, "_y_test": y_test,
+            "_y_pred": svm_pred, "_y_proba": svm_proba,
+        }
+        print(f"    Best params: {svm_gs.best_params_}")
+        print(f"    Tuned F1: {svm_f1:.4f}")
+
+    # ── Summary Table ──────────────────────────────────────────────
+    best_name = max(results, key=lambda k: results[k]["test_f1"])
+    print(f"\n  {'─' * 56}")
+    print(f"  {'Model':<22} {'F1':>7} {'AUPRC':>7} {'ROC':>7}")
+    print(f"  {'─' * 56}")
+    for name, m in results.items():
+        marker = " ★" if name == best_name else ""
+        print(f"  {name:<22} {m['test_f1']:>7.4f} {m['auprc']:>7.4f} {m.get('roc_auc', 0):>7.4f}{marker}")
+    print(f"  {'─' * 56}")
+    print(f"  最佳模型: {best_name}")
+    print("═" * 60)
+
+    results["_best_model_name"] = best_name
+    results["_best_model"] = results[best_name]["model"]
+
+    return results
+
+
 if __name__ == "__main__":
-    print("請透過 run_demo.py 或 notebooks/ 執行完整管線。")
+    print("請透過 run_ml_ops.py 或 notebooks/ 執行完整管線。")

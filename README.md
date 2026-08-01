@@ -48,12 +48,28 @@ An end-to-end **Data Engineering & Machine Learning pipeline** simulating a glob
 
 | Capability | Implementation | Business Impact |
 |---|---|---|
-| **Data Skew Handling** | Spark Salting + Repartitioning | Skew ratio: 101.76x → 2.21x |
+| **Data Skew Handling** | Spark Salting + Repartitioning | Synthetic demo 101.76x → 2.21x; real FCC data 442.34x → 1.31x |
 | **Guardian Score** | Bayesian Beta Distribution Reputation | Weighted consensus blacklisting |
 | **A/B Testing Framework** | Frequentist z-test + Cohen's d | p=0.0003, CI=[0.012, 0.040] |
 | **Real-time Blacklist** | Kafka → Flink → Redis pipeline | <50ms detection latency |
 | **Dataset Engineering** | SMOTE + cleanlab label correction | Data-centric AI refinement |
 | **Model Monitoring** | PSI drift detection + auto-retraining | PSI=0.163 → CRITICAL → auto-retrain |
+
+### Two datasets, two sets of numbers
+
+This repo runs on **two distinct datasets**. Quoting one set of numbers for the other would be misleading, so both are listed:
+
+| | Synthetic demo (`run_demo.py`) | Real FCC complaints (`run_ml_ops.py --data-path raw_fcc.csv`) |
+|---|---|---|
+| **Source** | 50k generated call records | 943k FCC consumer complaints → 177,592 numbers → 82k balanced training set |
+| **Data skew** | 101.76x → 2.21x | 442.34x → 1.31x |
+| **Model** | XGBoost, F1 0.9874 (AUPRC 0.9962) | SVM (RBF) on 20 engineered features, F1 0.9999 (ROC-AUC 1.0) |
+| **Cross-validation** | 5-fold F1 0.9885 | 5-fold F1 0.9997 (±0.0003) |
+| **Decision threshold** | default 0.5 | 0.8710, auto-tuned from the PR curve |
+| **Inference latency** | — | <0.057ms per record |
+| **Setup required** | numpy + scipy only | full environment (see `requirements.txt`) |
+
+The synthetic demo exists so the pipeline can be reproduced in seconds without Spark or Kafka. The FCC run is where the real numbers come from.
 
 ---
 
@@ -66,28 +82,37 @@ archangel/
 │   │   └── kafka_producer.py          # Simulated call event streaming
 │   ├── processing/
 │   │   ├── spark_etl.py               # ⭐ Data Skew + Salting technique
-│   │   └── data_pipeline.py           # Data cleaning + feature engineering
+│   │   ├── data_pipeline.py           # Data cleaning + feature engineering
+│   │   ├── fcc_data_pipeline.py       # ⭐ FCC pipeline: 20 engineered features
+│   │   ├── generate_raw_fcc_dataset.py # Dirty-data generator (contamination injection)
+│   │   └── eda.py                     # Exploratory data analysis
 │   ├── feature_engineering/
 │   │   ├── guardian_score.py           # ⭐ Bayesian reputation scoring
 │   │   └── call_behavior_features.py  # 31 behavioral features
 │   ├── ml/
-│   │   ├── scam_classifier.py         # XGBoost classifier + baseline
+│   │   ├── scam_classifier.py         # XGBoost / LR / RF / SVM comparison
+│   │   ├── svm_spam_classifier.py     # ⭐ SVM (RBF) on 20 FCC features
 │   │   ├── ab_testing.py              # ⭐ Full A/B testing framework
-│   │   └── data_refinement.py         # ⭐ SMOTE + cleanlab pipeline
+│   │   ├── data_refinement.py         # ⭐ SMOTE + cleanlab pipeline
+│   │   └── unsupervised.py            # DBSCAN + t-SNE exploration
 │   ├── monitoring/
 │   │   └── model_monitor.py           # PSI drift detection + auto-retrain
 │   └── api/
 │       └── detection_api.py           # FastAPI endpoint
+├── scripts/
+│   ├── fcc_feature_ablation.py        # Feature ablation study
+│   └── fcc_hard_negative_sensitivity.py # Hard-negative sensitivity analysis
 ├── configs/
 │   └── pipeline_config.yaml           # Centralized configuration
 ├── tests/
 │   └── test_guardian_score.py         # Unit tests
-├── dataset_generator/                  # Synthetic dataset generators
-├── run_demo.py                         # ⭐ One-click pipeline demo
+├── run_demo.py                         # ⭐ One-click demo (numpy + scipy only)
+├── run_ml_ops.py                       # ⭐ Full MLOps pipeline (real FCC data)
+├── run_ml_dev.py                       # ML development CLI (training, tuning, EDA)
 ├── docker-compose.yml                  # Full stack: Kafka+Spark+Redis+MLflow
 ├── Dockerfile
-├── fraud_1000_dataset.csv              # 1K sample dataset (100K variant included)
-└── requirements.txt
+├── requirements.txt                    # Full environment
+└── requirements-minimal.txt            # Demo only (numpy + scipy)
 ```
 
 ---

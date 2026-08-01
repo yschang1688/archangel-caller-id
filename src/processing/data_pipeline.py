@@ -5,10 +5,10 @@ Loads raw fraud dataset, applies cleaning rules, feature engineering,
 and prepares train-ready feature matrices.
 
 Supports TWO dataset schemas automatically:
-  • fraud_1000_dataset.csv  — legacy schema (Tags, Transaction_Amount, Is_Fraud…)
-  • fraud_100000_dataset.csv — production schema (Financial_Loss, Age_Group, Label…)
+  • label_1000_dataset.csv  — legacy schema (Tags, Transaction_Amount, Is_Fraud…)
+  • label_100000_dataset.csv — production schema (Financial_Loss, Age_Group, Label…)
 
-Portfolio: Caller-ID & Anti-Fraud Data Platform
+Role Target: Data Research Engineer @ Gogolook ISL
 """
 
 import os
@@ -25,8 +25,9 @@ SEED = 42
 
 # Resolve default dataset path relative to project root
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-DEFAULT_DATASET    = os.path.join(_PROJECT_ROOT, "fraud_1000_dataset.csv")
-LARGE_DATASET      = os.path.join(_PROJECT_ROOT, "fraud_100000_dataset.csv")
+DEFAULT_DATASET    = os.path.join(_PROJECT_ROOT, "label_1000_dataset.csv")
+LARGE_DATASET      = os.path.join(_PROJECT_ROOT, "label_100000_dataset.csv")
+RAW_LARGE_DATASET  = os.path.join(_PROJECT_ROOT, "raw_100000_dataset.csv")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -39,7 +40,7 @@ def _detect_schema(df: pd.DataFrame) -> str:
 
     Returns:
         'legacy'      → fraud_1000 schema  (Tags / Transaction_Amount / Is_Fraud)
-        'production'  → fraud_100000 schema (Financial_Loss / Age_Group / Label)
+        'production'  → label_100000 schema (Financial_Loss / Age_Group / Label)
     """
     if "Is_Fraud" in df.columns:
         return "legacy"
@@ -67,8 +68,13 @@ def remove_outliers_zscore(df: pd.DataFrame, col: str, threshold: float = 3.0) -
     Returns:
         Filtered DataFrame
     """
-    z = np.abs(scipy_stats.zscore(df[col].dropna()))
-    valid_idx = df[col].dropna().index[z < threshold]
+    series = df[col].dropna()
+    if len(series) < 3 or series.std() == 0:
+        logger.info(f"   Z-score [{col}]: 資料不足或無變異，略過")
+        return df.copy()
+
+    z = np.abs(scipy_stats.zscore(series))
+    valid_idx = series.index[z < threshold]
     removed = len(df) - len(valid_idx)
     logger.info(f"   Z-score [{col}]: 移除 {removed} 筆離群值 (|z|>{threshold}σ)")
     return df.loc[valid_idx].copy()
@@ -89,7 +95,7 @@ def clip_extremes(df: pd.DataFrame, col: str, lower_q: float = 0.01, upper_q: fl
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Production Schema Pipeline  (fraud_100000_dataset.csv)
+# Production Schema Pipeline  (label_100000_dataset.csv)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _pipeline_production(df: pd.DataFrame) -> tuple:
@@ -107,7 +113,43 @@ def _pipeline_production(df: pd.DataFrame) -> tuple:
         no ordinal relationship to assume).
       - C_POISON_BOT records are filtered out (bot-injected noise).
     """
-    print("\n  📋 Schema: production (fraud_100000_dataset.csv)")
+    print("\n  📋 Schema: production (label_100000_dataset.csv)")
+
+    # ── Step 0: Dirty-data normalization / coercion ──────────────────────
+    # Support raw datasets with missing values, malformed strings, and mixed types.
+    for col in ["Report_Count", "Financial_Loss", "Label"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    if "Label" in df.columns:
+        # Keep only binary labels; noisy labels (e.g., 2, -1, NaN) are dropped.
+        valid_mask = df["Label"].isin([0, 1])
+        dropped = (~valid_mask).sum()
+        if dropped > 0:
+            logger.info(f"   移除非法 Label 記錄: {dropped} 筆")
+        df = df[valid_mask].copy()
+
+    if "Cluster_ID" in df.columns:
+        df["Cluster_ID"] = df["Cluster_ID"].fillna("C_UNKNOWN").astype(str)
+    else:
+        df["Cluster_ID"] = "C_UNKNOWN"
+
+    for cat_col in ["Age_Group", "Education"]:
+        if cat_col in df.columns:
+            df[cat_col] = df[cat_col].fillna("UNKNOWN").astype(str)
+
+    # Numeric imputations (median) for raw dirty data.
+    for num_col in ["Report_Count", "Financial_Loss"]:
+        if num_col in df.columns and df[num_col].isna().any():
+            med = df[num_col].median()
+            df[num_col] = df[num_col].fillna(med)
+            logger.info(f"   缺失值補齊 [{num_col}]: median={med:.2f}")
+
+    # Guard against non-physical values in raw data.
+    if "Report_Count" in df.columns:
+        df["Report_Count"] = df["Report_Count"].clip(lower=0)
+    if "Financial_Loss" in df.columns:
+        df["Financial_Loss"] = df["Financial_Loss"].clip(lower=0)
 
     # ── Step 1: Filter bot / poison records ──────────────────────────────
     n_before = len(df)
@@ -119,6 +161,25 @@ def _pipeline_production(df: pd.DataFrame) -> tuple:
 
     # ── Step 3: Clip Financial_Loss (heavy right-tail) ────────────────
     df = clip_extremes(df, "Financial_Loss", lower_q=0.01, upper_q=0.99)
+
+    # ── Step 3.5: Feature Engineering v2 — Interaction + Transform Features ──
+    # Problem: XGBoost splits one feature at a time. Multiplicative fraud signals
+    # (high-volume AND high-loss) require explicit interaction terms to be learned.
+    #
+    # Three new features:
+    #   report_loss_interaction — fraud center intensity: many reports × large loss
+    #   financial_loss_log      — log1p transform to compress right-tail of Financial_Loss
+    #   high_frequency_flag     — binary: is this number in the top 10% of report counts?
+    #                             robust to exact count magnitude, generalizes across clusters
+    if "Report_Count" in df.columns and "Financial_Loss" in df.columns:
+        df["report_loss_interaction"] = df["Report_Count"] * df["Financial_Loss"]
+        df["financial_loss_log"] = np.log1p(df["Financial_Loss"].clip(lower=0))
+        freq_threshold = df["Report_Count"].quantile(0.90)
+        df["high_frequency_flag"] = (df["Report_Count"] > freq_threshold).astype(int)
+        logger.info(
+            f"   Feature Eng v2: report_loss_interaction / financial_loss_log / "
+            f"high_frequency_flag (freq_threshold={freq_threshold:.2f})"
+        )
 
     # ── Step 4: Drop non-predictive / leaky columns ──────────────────────
     # Keep Cluster_ID in a separate column for unsupervised analysis
@@ -135,7 +196,12 @@ def _pipeline_production(df: pd.DataFrame) -> tuple:
     # RobustScaler uses median and IQR → handles financial data skew better
     # than StandardScaler which is distorted by extreme fraud amounts.
     scaler = RobustScaler()
-    numeric_cols = [c for c in ["Report_Count", "Financial_Loss"] if c in df.columns]
+    numeric_cols = [
+        c for c in [
+            "Report_Count", "Financial_Loss",
+            "report_loss_interaction", "financial_loss_log",
+        ] if c in df.columns
+    ]
     df[numeric_cols] = scaler.fit_transform(df[numeric_cols])
     logger.info(f"   RobustScaler 已套用: {numeric_cols}")
 
@@ -147,7 +213,7 @@ def _pipeline_production(df: pd.DataFrame) -> tuple:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Legacy Schema Pipeline  (fraud_1000_dataset.csv)
+# Legacy Schema Pipeline  (label_1000_dataset.csv)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _pipeline_legacy(df: pd.DataFrame) -> tuple:
@@ -157,7 +223,7 @@ def _pipeline_legacy(df: pd.DataFrame) -> tuple:
     Schema: Incident_ID, Report_Time, Phone_Number, Tags,
             Report_Count, Transaction_Amount, Victim_Demographic, Is_Fraud
     """
-    print("\n  📋 Schema: legacy (fraud_1000_dataset.csv)")
+    print("\n  📋 Schema: legacy (label_1000_dataset.csv)")
 
     # ── Step 1: Remove bot / noise records ───────────────────────────────
     n_before = len(df)

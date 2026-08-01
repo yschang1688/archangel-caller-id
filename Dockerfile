@@ -17,7 +17,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY src/ ./src/
 COPY configs/ ./configs/
-COPY fraud_1000_dataset.csv .
+COPY label_1000_dataset.csv .
 
 # Expose API port
 EXPOSE 8000

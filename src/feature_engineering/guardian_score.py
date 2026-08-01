@@ -10,7 +10,7 @@ Core Design:
     - Anti-manipulation: device fingerprint + geo consistency checks
     - Bayesian update: new evidence continuously refines each user's score
 
-Portfolio: Caller-ID & Anti-Fraud Data Platform
+Role Target: Data Research Engineer @ Gogolook ISL
 """
 
 import math
@@ -73,6 +73,7 @@ class UserProfile:
 
     # Behavioral anomaly flags
     report_burst_count: int = 0   # Reports in last 5 minutes
+    last_report_time: float = 0.0 # Unix timestamp of last report
     geo_inconsistency_flag: bool = False
 
     @property
@@ -248,6 +249,10 @@ class GuardianScoreEngine:
 
     def _check_burst_rate(self, user: UserProfile, current_time: float) -> bool:
         """Returns True if user is within normal reporting rate."""
+        # 如果距離上次回報已經超過 5 分鐘，重置計數器
+        if current_time - user.last_report_time > self.BURST_WINDOW_SEC:
+            user.report_burst_count = 0
+            
         if user.report_burst_count >= self.BURST_LIMIT:
             logger.warning(f"🚨 Burst rate exceeded for user {user.user_id} — throttling")
             return False
@@ -298,6 +303,7 @@ class GuardianScoreEngine:
 
         self._check_geo_consistency(user, report_country)
         user.report_burst_count += 1
+        user.last_report_time = current_time
 
         # ── Create weighted report
         self._report_id_counter += 1
@@ -472,6 +478,118 @@ def run_demo() -> dict:
     for c in candidates:
         print(f"   {c['phone_number']} | Score: {c['weighted_score']:.3f} | "
               f"Category: {c['category']}")
+
+    return {
+        "users_registered": len(engine.users),
+        "blacklist_candidates": len(candidates),
+        "top_guardian_score": engine.get_leaderboard()[0]["guardian_score"] if engine.get_leaderboard() else 0,
+    }
+
+
+def run_demo_with_model(phone_predictions: list[dict]) -> dict:
+    """
+    使用真實模型預測結果驅動 Guardian Score Demo（取代純合成資料）。
+
+    以模型預測為高信心 spam 的真實電話號碼為回報對象，
+    模擬多位用戶回報同一號碼的加權共識流程。
+
+    參數：
+        phone_predictions: list[dict]，每筆包含：
+            - phone_number (str): 真實電話號碼
+            - spam_proba (float): 模型預測的 spam 機率
+            前 N 筆高信心 spam 號碼將被用於 demo
+
+    回傳：
+        dict 包含 users_registered, blacklist_candidates, top_guardian_score
+
+    依賴：
+        GuardianScoreEngine, UserProfile, PhoneRiskProfile
+    """
+    random.seed(SEED)
+
+    engine = GuardianScoreEngine()
+
+    print("\n" + "═" * 65)
+    print("  GUARDIAN SCORE ENGINE — DEMO（真實模型預測驅動）")
+    print("═" * 65)
+
+    # ── 註冊用戶（模擬不同信任等級）────────────────────────────
+    users = [
+        ("archangel_alice", "fp_aa001", "TW"),
+        ("knight_bob",      "fp_kb002", "TW"),
+        ("new_carol",       "fp_nc003", "TW"),
+        ("botnet_dave",     "fp_bd004", "RU"),
+    ]
+    for uid, fp, country in users:
+        engine.register_user(uid, fp, country)
+
+    # 模擬歷史回報紀錄
+    engine.users["archangel_alice"].alpha = 47.0
+    engine.users["archangel_alice"].beta = 5.0
+    engine.users["archangel_alice"].total_reports = 50
+    engine.users["archangel_alice"].confirmed_correct = 45
+
+    engine.users["knight_bob"].alpha = 16.0
+    engine.users["knight_bob"].beta = 6.0
+    engine.users["knight_bob"].total_reports = 20
+
+    print("\n📊 Initial Guardian Scores:")
+    for uid, _, _ in users:
+        u = engine.users[uid]
+        print(f"   {uid:<25} | Score: {u.guardian_score:.3f} | "
+              f"Rank: {u.rank.display_name} | Weight: {u.report_weight:.2f}")
+
+    # ── 取出模型預測高信心 spam 號碼 ────────────────────────────
+    high_conf_spam = sorted(
+        [p for p in phone_predictions if p["spam_proba"] >= 0.8],
+        key=lambda x: -x["spam_proba"],
+    )
+    # 取前 5 個作為 demo（若不足則用全部）
+    demo_phones = high_conf_spam[:5] if len(high_conf_spam) >= 5 else high_conf_spam
+
+    if not demo_phones:
+        print("\n⚠️  模型未找到高信心 spam 號碼（proba >= 0.8），使用 fallback 合成號碼")
+        demo_phones = [{"phone_number": "+886-800-SCAM-99", "spam_proba": 0.92}]
+
+    scam_categories = ["investment", "customs", "romance", "impersonation"]
+    reporter_sequence = ["archangel_alice", "knight_bob", "new_carol", "botnet_dave"]
+
+    total_reported = 0
+    for phone_info in demo_phones:
+        phone = phone_info["phone_number"]
+        proba = phone_info["spam_proba"]
+        print(f"\n📞 Reporting: {phone}  (model spam_proba={proba:.4f})")
+
+        for i, uid in enumerate(reporter_sequence):
+            cat = scam_categories[i % len(scam_categories)]
+            result = engine.submit_report(uid, phone, cat)
+            print(f"   ▸ {uid} [{result['reporter_rank']}] "
+                  f"→ weighted_score={result['weighted_scam_score']:.3f}  "
+                  f"decision={result['decision']}")
+            total_reported += 1
+
+    # ── Bayesian 更新（模擬地面真實驗證）────────────────────────
+    print("\n🔄 Bayesian Updates (ground truth validation):")
+    for _ in range(5):
+        engine.validate_report("archangel_alice", True)
+    engine.validate_report("botnet_dave", False)
+    engine.validate_report("botnet_dave", False)
+
+    # ── Leaderboard ────────────────────────────────────────────
+    print("\n🏆 Leaderboard (Top Contributors):")
+    for entry in engine.get_leaderboard():
+        print(f"   #{entry['rank']} {entry['user_id']:<25} | "
+              f"Score: {entry['guardian_score']:.3f} | "
+              f"Reports: {entry['total_reports']}")
+
+    candidates = engine.get_blacklist_candidates()
+    print(f"\n🔴 Blacklist Candidates: {len(candidates)}")
+    for c in candidates:
+        print(f"   {c['phone_number']} | Score: {c['weighted_score']:.3f} | "
+              f"Category: {c['category']}")
+
+    print(f"\n📈 真實模型驅動統計: 高信心 spam 號碼 {len(high_conf_spam)} 個, "
+          f"demo 回報 {total_reported} 筆")
 
     return {
         "users_registered": len(engine.users),

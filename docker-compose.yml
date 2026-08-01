@@ -110,7 +110,7 @@ services:
     volumes:
       - ./src:/app/src
       - ./configs:/app/configs
-      - ./fraud_1000_dataset.csv:/app/fraud_1000_dataset.csv
+      - ./label_1000_dataset.csv:/app/label_1000_dataset.csv
 
   # ─── Spark Master (for batch ETL demos) ──────────────────────────
   spark-master:

@@ -11,14 +11,14 @@ Key insight: In production, ~30% of scam calls come from NEW patterns
 not yet in the training labels. Unsupervised discovery feeds those signals
 back into the labeling pipeline (Data-centric AI closed loop).
 
-Dataset:  fraud_100000_dataset.csv
+Dataset:  label_100000_dataset.csv
           Ground-truth clusters in Cluster_ID column:
             C_NORMAL       → 90k  legitimate calls
             C_88X_RING     →  4k  coordinated scam ring (hot-key pattern)
             C_DEMO_TARGET  →  4k  targeted demo victims
             C_POISON_BOT   →  2k  bot accounts (filtered upstream)
 
-Portfolio: Caller-ID & Anti-Fraud Data Platform
+Role Target: Data Research Engineer @ Gogolook ISL
 """
 
 import numpy as np
@@ -189,7 +189,7 @@ def run_tsne_and_plot(
     X_scaled = StandardScaler().fit_transform(X_sub)
 
     print(f"[t-SNE] 計算 2D 嵌入 (perplexity=30, iter=1000)...")
-    tsne = TSNE(n_components=2, perplexity=30, n_iter=1000,
+    tsne = TSNE(n_components=2, perplexity=30, max_iter=1000,
                 random_state=SEED, n_jobs=-1)
     X_tsne = tsne.fit_transform(X_scaled)
     print(f"   KL-divergence: {tsne.kl_divergence_:.4f}")
@@ -343,4 +343,4 @@ def run_unsupervised_analysis(
 
 
 if __name__ == "__main__":
-    print("請透過 notebooks/ 或 run_demo.py 執行非監督式分析。")
+    print("請透過 notebooks/ 或 run_ml_ops.py 執行非監督式分析。")

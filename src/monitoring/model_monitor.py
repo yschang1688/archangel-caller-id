@@ -9,7 +9,7 @@ A model trained 3 months ago may be blind to new attack vectors.
 This module detects when the current model has degraded and triggers
 the retraining pipeline — forming a closed feedback loop.
 
-Portfolio: Caller-ID & Anti-Fraud Data Platform
+Role Target: Data Research Engineer @ Gogolook ISL
 """
 
 import math
@@ -415,6 +415,112 @@ def run_demo() -> dict:
         "retraining_triggered": monitor._retraining_triggered,
         "baseline_hit_rate": baseline_snap.hit_rate,
         "final_hit_rate": drifted_snap.hit_rate,
+    }
+
+
+def run_demo_with_model(model_metrics: dict) -> dict:
+    """
+    使用真實訓練模型的指標進行 30 天漂移模擬（取代硬編碼數值）。
+
+    參數：
+        model_metrics: dict，包含以下 key：
+            - hit_rate (float): 模型在測試集上的 recall
+            - precision (float): 模型在測試集上的 precision
+            - fpr (float): 模型在測試集上的 false positive rate
+            - y_proba_train (list[float]): 訓練集預測機率分佈
+            - y_proba_test (list[float]): 測試集預測機率分佈
+            - inference_latency_ms (float, optional): 推論延遲
+
+    回傳：
+        dict 包含 PSI、漂移嚴重度、hit_rate 變化等關鍵指標
+
+    依賴：
+        ModelMonitor, PSICalculator
+    """
+    random.seed(SEED)
+    np.random.seed(SEED)
+
+    baseline_hr = model_metrics["hit_rate"]
+    baseline_prec = model_metrics["precision"]
+    baseline_fpr = model_metrics["fpr"]
+    baseline_scores = model_metrics["y_proba_train"]
+    current_scores = model_metrics["y_proba_test"]
+    latency = model_metrics.get("inference_latency_ms", 25.0)
+
+    monitor = ModelMonitor(model_version="v1.2.0-SVM")
+
+    print("\n" + "═" * 60)
+    print("  MODEL MONITOR — 30-DAY SIMULATION（真實模型指標）")
+    print("═" * 60)
+    print(f"  📌 Baseline hit_rate={baseline_hr:.4f}  precision={baseline_prec:.4f}  FPR={baseline_fpr:.4f}")
+    print(f"     score distribution: train={len(baseline_scores)} samples, test={len(current_scores)} samples")
+
+    # ── Week 1: Baseline（來自真實模型）──────────────────────────
+    print("\n📅 Week 1: Establishing baseline（真實模型 → 測試集指標）...")
+    baseline_snap = monitor.record_snapshot(
+        hit_rate=baseline_hr,
+        fpr=baseline_fpr,
+        precision=baseline_prec,
+        n_predictions=len(baseline_scores),
+        score_samples=baseline_scores,
+        avg_latency_ms=latency,
+    )
+
+    # ── Week 2-3: 自然微漂移 ────────────────────────────────────
+    print("📅 Week 2-3: Normal operation（漸進漂移模擬）...")
+    for day in range(14):
+        drift = day * 0.001
+        # 真實分數加小幅 noise 模擬自然變化
+        perturbed = [
+            max(0.0, min(1.0, s + random.gauss(drift * 0.3, 0.01)))
+            for s in current_scores[:500]
+        ]
+        monitor.record_snapshot(
+            hit_rate=baseline_hr - drift * 0.5,
+            fpr=baseline_fpr + drift * 0.1,
+            precision=baseline_prec - drift * 0.3,
+            n_predictions=random.randint(800_000, 900_000),
+            score_samples=perturbed,
+            avg_latency_ms=random.gauss(25, 2),
+        )
+
+    # ── Week 4: 新型詐騙浪潮 → 分佈偏移 ────────────────────────
+    print("📅 Week 4: New cross-national scam wave detected...")
+    drifted_scores = [
+        max(0.0, min(1.0, s + random.gauss(-0.15, 0.10)))
+        for s in current_scores
+    ]
+    drifted_snap = monitor.record_snapshot(
+        hit_rate=baseline_hr - 0.06,     # 6pp drop
+        fpr=baseline_fpr + 0.018,
+        precision=baseline_prec - 0.04,
+        n_predictions=920_000,
+        score_samples=drifted_scores,
+        avg_latency_ms=28.1,
+    )
+
+    # ── 漂移分析 ────────────────────────────────────────────────
+    print("\n🔍 Running Drift Analysis...")
+    report = monitor.analyze_drift(drifted_snap)
+
+    # ── Trend 輸出 ──────────────────────────────────────────────
+    print("\n📊 Performance Trend (last 5 snapshots):")
+    trend = monitor.get_performance_trend()
+    for entry in trend[-5:]:
+        print(f"   {entry['timestamp']} | Hit Rate: {entry['hit_rate']:.3f} | "
+              f"FPR: {entry['fpr']:.3f} | F1: {entry['f1']:.3f}")
+
+    print(f"\n✅ Total snapshots recorded: {len(monitor.snapshots)}")
+    print(f"   Retraining triggered: {monitor._retraining_triggered}")
+
+    return {
+        "psi_score": round(report.psi_score, 4),
+        "drift_severity": report.drift_severity,
+        "hit_rate_delta": round(report.hit_rate_delta, 4),
+        "fpr_delta": round(report.fpr_delta, 4),
+        "retraining_triggered": monitor._retraining_triggered,
+        "baseline_hit_rate": round(baseline_snap.hit_rate, 4),
+        "final_hit_rate": round(drifted_snap.hit_rate, 4),
     }
 
 

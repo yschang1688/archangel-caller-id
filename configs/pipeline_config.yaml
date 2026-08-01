@@ -58,6 +58,14 @@ classifier:
   learning_rate: 0.1
   cv_folds: 5
 
+# ── FCC Pipeline (SVM) ───────────────────────────────────────
+# 負樣本策略：
+#   - negative_ratio: 負/正樣本比例 (1.0 = 1:1 平衡)
+#   - hard_negative_ratio: hard negatives 比例（預設 0.03 = 3/100）
+fcc:
+  negative_ratio: 1.0
+  hard_negative_ratio: 0.03
+
 # ── FastAPI ─────────────────────────────────────────────────
 api:
   host: "0.0.0.0"

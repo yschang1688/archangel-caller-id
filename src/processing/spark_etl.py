@@ -7,7 +7,7 @@ In global anti-fraud scenarios, certain phone numbers (e.g., scam call centers)
 generate extreme query hotspots — a classic Data Skew problem. This module
 demonstrates production-grade solutions.
 
-Portfolio: Caller-ID & Anti-Fraud Data Platform
+Role Target: Data Research Engineer @ Gogolook ISL
 """
 
 import hashlib
@@ -367,6 +367,120 @@ class AntiFraudETL:
             ))
 
         return records
+
+    def load_from_fcc_csv(self, data_path: str, sample_n: int = 50_000) -> list:
+        """
+        載入 FCC 原始 CSV，轉換為 CallRecord 列表。
+
+        FCC 資料所有記錄本身即為「投訴案件」，因此 reported_as_scam=True。
+        VoIP 判定：Method 欄位含 robocall / prerecorded 的視為 VoIP。
+
+        參數：
+            data_path:  FCC CSV 路徑（raw_fcc.csv 或 staging CSV 均可）
+            sample_n:   最多取樣筆數（預設 50,000，避免記憶體壓力）
+
+        回傳：
+            list[CallRecord]
+        """
+        import os
+        import pandas as pd
+        import numpy as np
+
+        logger.info(f"📂 Loading FCC CSV: {os.path.basename(data_path)}")
+        df = pd.read_csv(data_path, on_bad_lines="skip", low_memory=False)
+        logger.info(f"   原始列數: {len(df):,}")
+
+        # 保留有 Caller ID 的記錄
+        df = df[df["Caller ID Number"].notna()].copy()
+
+        # 移除明顯假號碼
+        fake = {"000-000-0000", "555-555-5555", "111-111-1111", "999-999-9999"}
+        df = df[~df["Caller ID Number"].isin(fake)].copy()
+        logger.info(f"   清洗後有效列數: {len(df):,}")
+
+        # 取樣（避免資料過大拖慢 ETL demo）
+        if len(df) > sample_n:
+            df = df.sample(n=sample_n, random_state=SEED).reset_index(drop=True)
+            logger.info(f"   已取樣至 {sample_n:,} 筆")
+
+        # VoIP 判定（向量化）
+        method_series = df.get("Method", None)
+        if method_series is not None:
+            is_voip_arr = method_series.str.lower().str.contains(
+                "robocall|prerecorded|auto-dialer", na=False
+            ).tolist()
+        else:
+            is_voip_arr = [False] * len(df)
+
+        # 產生隨機輔助欄位（確定性）
+        rng = random.Random(SEED)
+        phone_arr = df["Caller ID Number"].astype(str).tolist()
+
+        records = []
+        import time as _time
+        ts_base = _time.time()
+        for i, (phone, is_voip) in enumerate(zip(phone_arr, is_voip_arr)):
+            records.append(CallRecord(
+                call_id=f"fcc_{i:08d}",
+                phone_number=phone.strip(),
+                caller_country="US",
+                callee_country="US",
+                call_duration_sec=rng.randint(1, 60),
+                timestamp=ts_base - rng.randint(0, 365 * 24 * 3600),
+                is_voip=bool(is_voip),
+                reported_as_scam=True,   # FCC 投訴本身即為詐騙回報
+                guardian_score_weight=round(rng.uniform(0.5, 2.0), 2),
+            ))
+
+        logger.info(f"   轉換完成: {len(records):,} 筆 CallRecord")
+        return records
+
+    def run_from_csv(self, data_path: str, sample_n: int = 50_000) -> dict:
+        """
+        使用真實 FCC CSV 資料執行完整 ETL pipeline。
+        流程與 run() 相同，差別在於資料來源為外部 CSV 而非合成資料。
+        """
+        import os
+        random.seed(SEED)
+
+        logger.info(
+            f"🚀 Starting Archangel ETL Pipeline | Source: {os.path.basename(data_path)}"
+        )
+
+        t0 = time.perf_counter()
+        records = self.load_from_fcc_csv(data_path, sample_n=sample_n)
+        logger.info(f"✅ Phase 1 — FCC data loaded: {len(records):,} records")
+
+        hot_keys = self.skew_handler.detect_hot_keys(records)
+        logger.info(f"✅ Phase 2 — Hot keys detected: {len(hot_keys)}")
+
+        partial = self.skew_handler.partition_and_process(records)
+        logger.info(f"✅ Phase 3 — Partial results: {len(partial)} salted groups")
+
+        final_results = self.skew_handler.final_aggregate(partial)
+        t_total = (time.perf_counter() - t0) * 1000
+
+        risk_counts = defaultdict(int)
+        for stats in final_results.values():
+            risk_counts[stats["risk_level"]] += 1
+
+        self.skew_handler.print_skew_report()
+
+        logger.info(f"✅ Pipeline complete in {t_total:.0f}ms")
+        logger.info(f"   📊 Risk Distribution: {dict(risk_counts)}")
+        logger.info(f"   🔴 HIGH risk numbers → Redis blacklist: {risk_counts['HIGH']}")
+
+        skew_report = self.skew_handler.get_skew_report()
+
+        return {
+            "total_records": len(records),
+            "unique_numbers": len(final_results),
+            "hot_keys_handled": len(hot_keys),
+            "risk_distribution": dict(risk_counts),
+            "pipeline_time_ms": round(t_total, 2),
+            "pre_salt_skew_ratio": skew_report.get("pre_salt_skew_ratio", 0),
+            "post_salt_skew_ratio": skew_report.get("post_salt_skew_ratio", 0),
+        }
 
     def run(self, n_records: int = 50_000) -> dict:
         """Execute the full ETL pipeline with skew handling."""

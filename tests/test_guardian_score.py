@@ -8,6 +8,8 @@ and weighted consensus logic.
 import pytest
 import sys
 import os
+import time
+from unittest.mock import patch
 
 # Ensure project root is in path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -147,9 +149,34 @@ class TestGuardianScoreEngine:
         """Excessive reporting should be throttled."""
         self.engine.register_user("spammer", "fp1", "TW")
         self.engine.users["spammer"].report_burst_count = 10  # At limit
+        self.engine.users["spammer"].last_report_time = time.time()  # Keep in window
 
         result = self.engine.submit_report("spammer", "+886-SPAM", "investment")
         assert result["status"] == "throttled"
+
+    def test_burst_throttling_window_reset(self):
+        """測試爆量回報限制在時間視窗過期後，是否會正確重置。"""
+        self.engine.register_user("active_user", "fp1", "TW")
+        
+        # 模擬快速回報 10 次，達到上限
+        for _ in range(10):
+            res = self.engine.submit_report("active_user", "+886-SPAM", "investment")
+            assert res.get("status") != "throttled"
+            
+        # 第 11 次回報應該被阻擋
+        res_blocked = self.engine.submit_report("active_user", "+886-SPAM", "investment")
+        assert res_blocked.get("status") == "throttled"
+        
+        # 模擬時間推進了 301 秒 (超過 BURST_WINDOW_SEC 300秒)
+        future_time = time.time() + 301
+        
+        # 這裡我們需要 mock time.time 讓 submit_report 認為時間已經過了
+        with patch('time.time', return_value=future_time):
+            res_recovered = self.engine.submit_report("active_user", "+886-SPAM", "investment")
+            
+            # 測試是否成功重置並允許回報
+            assert res_recovered.get("status") != "throttled", "過了時間視窗後應該要解除封鎖"
+            assert self.engine.users["active_user"].report_burst_count == 1, "計數器應該被重置為 1"
 
     def test_leaderboard(self):
         """Leaderboard should return sorted users."""
