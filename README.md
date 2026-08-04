@@ -31,24 +31,25 @@ As implemented in this repo — every box maps to a file you can open:
 │                   ARCHANGEL DATA PIPELINE (implemented)              │
 │                                                                      │
 │  [Call/SMS Events] ──► [kafka_producer.py] ──► [spark_etl.py]        │
-│  (simulated stream)    (event generator)    (Spark batch ETL+Salting)│
-│                                                      │               │
-│            [fcc_data_pipeline.py — 20 engineered features]           │
-│                       │                              │               │
-│         [guardian_score.py]              [SVM / XGBoost training]    │
-│         (Bayesian reputation)            [MLflow tracking]           │
-│                       │                              │               │
-│         [ab_testing.py]                  [model_monitor.py]          │
-│         (z-test + Cohen's d)             (PSI drift → retrain)       │
-│                       └────────────┬─────────────────┘               │
-│                [detection_api.py — FastAPI serving]                  │
-│                (in-memory state; Redis wiring planned)               │
+│                        (real Kafka publish   (Spark batch ETL+Salting)│
+│                         or simulation)               │               │
+│         │                                            │               │
+│         ▼ topic 'call-events'                        │               │
+│  [blacklist_stream.py]                [fcc_data_pipeline.py]         │
+│  (Kafka consumer + rolling            (20 engineered features)       │
+│   features + SVM scoring)                │           │               │
+│         │                    [guardian_score.py]  [SVM/XGBoost]      │
+│         ▼                    (Bayesian reputation) [MLflow]          │
+│  [Redis blacklist] ◄─── e2e p50 6.7ms / p99 20.3ms   │               │
+│         │                    [ab_testing.py]  [model_monitor.py]     │
+│         ▼                    (z-test+Cohen d) (PSI drift→retrain)    │
+│  [detection_api.py — FastAPI serving, merges Redis + consensus]      │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
 Runtime infra via `docker-compose.yml` (9 services): Zookeeper, Kafka, Kafka-UI, Redis, Redis-Insight, MLflow, the FastAPI app, and a Spark master/worker pair.
 
-> **Scope note** — the streaming layer is simulated: `kafka_producer.py` generates the event stream in-process, and `detection_api.py` keeps blacklist state in memory. A Flink-based real-time path is a design target, not part of this codebase — see [Roadmap](#roadmap-designed-not-implemented).
+> **Measured, not projected** — the streaming path is real: `kafka_producer.py --broker` publishes to Kafka via confluent_kafka, `src/streaming/blacklist_stream.py` consumes, scores with the trained SVM, and writes the Redis blacklist. End-to-end latency measured at **p50 6.7ms / p95 10.7ms / p99 20.3ms** over 5,000 events at 500 ev/s (single broker, local Docker) — within the p99 < 50ms SLA tracked by `model_monitor.py`. In a run seeded with 5 scam centers, the blacklist converged to exactly those 5 numbers with zero false positives.
 
 ---
 
@@ -59,7 +60,8 @@ Runtime infra via `docker-compose.yml` (9 services): Zookeeper, Kafka, Kafka-UI,
 | **Data Skew Handling** | Spark Salting + Repartitioning | Synthetic demo 101.76x → 2.21x; real FCC data 442.34x → 1.31x |
 | **Guardian Score** | Bayesian Beta Distribution Reputation | Weighted consensus blacklisting |
 | **A/B Testing Framework** | Frequentist z-test + Cohen's d | p=0.0003, CI=[0.012, 0.040] |
-| **Detection API** | FastAPI serving + Guardian-consensus blacklist (`detection_api.py`) | SVM inference <0.057ms/record |
+| **Real-time Blacklist** | Kafka → Python consumer → SVM → Redis (`blacklist_stream.py`) | e2e p99 20.3ms measured (5k events @ 500 ev/s) |
+| **Detection API** | FastAPI serving, merges Redis stream blacklist + Guardian consensus | batch-amortized inference 0.037ms/record |
 | **Dataset Engineering** | SMOTE + cleanlab label correction | Data-centric AI refinement |
 | **Model Monitoring** | PSI drift detection + auto-retraining | PSI=0.163 → CRITICAL → auto-retrain |
 
@@ -74,7 +76,7 @@ This repo runs on **two distinct datasets**. Quoting one set of numbers for the 
 | **Model** | XGBoost, F1 0.9874 (AUPRC 0.9962) | SVM (RBF) on 20 engineered features, F1 0.9999 (ROC-AUC 1.0) |
 | **Cross-validation** | 5-fold F1 0.9885 | 5-fold F1 0.9997 (±0.0003) |
 | **Decision threshold** | default 0.5 | 0.8710, auto-tuned from the PR curve |
-| **Inference latency** | — | <0.057ms per record |
+| **Inference latency** | — | 0.037ms/record batch-amortized; 0.40ms true single-record (`scripts/measure_inference_latency.py`) |
 | **Setup required** | numpy + scipy only | full environment (see `requirements.txt`) |
 
 The synthetic demo exists so the pipeline can be reproduced in seconds without Spark or Kafka. The FCC run is where the real numbers come from.
@@ -103,13 +105,16 @@ archangel/
 │   │   ├── ab_testing.py              # ⭐ Full A/B testing framework
 │   │   ├── data_refinement.py         # ⭐ SMOTE + cleanlab pipeline
 │   │   └── unsupervised.py            # DBSCAN + t-SNE exploration
+│   ├── streaming/
+│   │   └── blacklist_stream.py        # ⭐ Kafka consumer → SVM → Redis blacklist (e2e p99 20.3ms)
 │   ├── monitoring/
 │   │   └── model_monitor.py           # PSI drift detection + auto-retrain
 │   └── api/
-│       └── detection_api.py           # FastAPI endpoint
+│       └── detection_api.py           # FastAPI endpoint (merges Redis stream blacklist)
 ├── scripts/
 │   ├── fcc_feature_ablation.py        # Feature ablation study
-│   └── fcc_hard_negative_sensitivity.py # Hard-negative sensitivity analysis
+│   ├── fcc_hard_negative_sensitivity.py # Hard-negative sensitivity analysis
+│   └── measure_inference_latency.py   # Batch-amortized vs single-record latency
 ├── configs/
 │   └── pipeline_config.yaml           # Centralized configuration
 ├── tests/
@@ -153,6 +158,21 @@ uvicorn src.api.detection_api:app --reload
 
 # Docker full stack (Kafka + Spark + Redis + MLflow)
 docker-compose up -d
+
+# ⭐ Real-time streaming demo (real Kafka + Redis, needs docker-compose up)
+# Prereq: a trained model at models/svm_spam_model.pkl — train once with
+#   python run_ml_dev.py --data-path <FCC csv> --skip-eda --skip-unsupervised
+# (FCC Consumer Complaints data is public: https://opendata.fcc.gov)
+# Without the model, the streaming tests auto-skip.
+# Terminal 1 — consumer (--from-latest keeps latency numbers free of backlog replay)
+python -m src.streaming.blacklist_stream --broker localhost:9092 \
+  --redis localhost:6379 --max-events 5000 --from-latest --flush
+# Terminal 2 — steady-state producer (omit --rate to burst; bursting measures backlog, not latency)
+python -m src.ingestion.kafka_producer --broker localhost:9092 --n-events 5000 --rate 500
+# Consumer prints p50/p95/p99; blacklist: redis-cli hgetall archangel:blacklist
+
+# Inference latency measurement (source of the README numbers)
+python -m scripts.measure_inference_latency
 
 # Run tests
 pytest tests/ -v
@@ -214,7 +234,7 @@ All results above are **reproducible** with `python run_demo.py`.
 - Population Stability Index (PSI) for distribution drift detection
 - 30-day simulation with gradual drift + sudden scam wave
 - Auto-retraining trigger via structured Kubeflow pipeline call
-- Latency SLA gate: alerts when p99 exceeds the 50ms threshold (`LATENCY_SLA_MS`) — a monitoring rule, not a measured serving latency
+- Latency SLA gate: alerts when p99 exceeds the 50ms threshold (`LATENCY_SLA_MS`); the streaming path currently measures p99 20.3ms against it
 
 ### 5. Bayesian Reputation (guardian_score.py)
 - Beta distribution for user accuracy estimation
@@ -243,12 +263,11 @@ All results above are **reproducible** with `python run_demo.py`.
 
 ## Roadmap (designed, not implemented)
 
-These components appear in the original system design but are **not in this codebase** — listed here so the architecture above stays verifiable file-by-file:
+These components appear in the original system design but are **not in this codebase** — listed here so the architecture above stays verifiable file-by-file. (Previously listed "real Kafka publishing" and "Redis-backed blacklist" have since been implemented — see `src/streaming/blacklist_stream.py`.)
 
-- **Flink streaming layer** — a real-time Kafka → Flink → Redis blacklist path targeting <50ms end-to-end detection. Today the stream is simulated by `kafka_producer.py`, and the 50ms figure exists only as the monitoring SLA threshold (`LATENCY_SLA_MS`) in `model_monitor.py`.
-- **Redis-backed API state** — `detection_api.py` currently keeps blacklist/report state in memory; the Redis service in `docker-compose.yml` is provisioned but not yet wired into the API.
+- **Flink streaming layer** — the streaming consumer is a single-process Python worker; horizontal scale-out, exactly-once semantics, and windowing would need Flink or a multi-partition consumer group. The measured latency numbers are single-broker local-Docker conditions.
+- **Guardian consensus state externalization** — the stream blacklist lives in Redis, but `detection_api.py` still keeps Guardian Score reputation state in memory.
 - **ScyllaDB / BigQuery storage** — batch ETL output currently lands in local files.
-- **Real Kafka publishing** — `kafka_producer.py` simulates the `call-events` topic in-process; confluent_kafka wiring is the production path.
 
 ---
 

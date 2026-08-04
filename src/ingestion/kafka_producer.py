@@ -3,10 +3,11 @@ kafka_producer.py — Archangel Simulated Kafka Event Producer
 =============================================================
 Generates realistic call event streams for pipeline ingestion.
 
-In production: publishes to Kafka topic 'call-events' via confluent_kafka.
-Here: simulates the event stream with configurable throughput.
-
-Portfolio: Caller-ID & Anti-Fraud Data Platform
+Two modes:
+    default          — in-process simulation (no broker needed)
+    --broker <addr>  — real publishing to Kafka topic 'call-events'
+                       via confluent_kafka (pairs with
+                       src/streaming/blacklist_stream.py downstream)
 """
 
 import json
@@ -35,9 +36,10 @@ class CallEvent:
     callee_country: str
     call_duration_sec: int
     is_voip: bool
-    timestamp: float
+    timestamp: float            # Simulated call time (drives time-of-day features)
     device_fingerprint: str
     sms_content_hash: str = ""  # Hash of SMS body (privacy-preserving)
+    produced_at: float = 0.0    # Publish wall-clock time (drives e2e latency measurement)
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), ensure_ascii=False)
@@ -83,11 +85,32 @@ class SimulatedKafkaProducer:
                 is_voip = random.random() < 0.90
                 caller_country = random.choice(["MM", "MY", "TH", "KH"])
                 duration = random.randint(1, 30)  # Short robocalls
+                # Scam centers work the night shift (22-06)
+                call_hour = random.choice([22, 23, 0, 1, 2, 3, 4, 5])
             else:
                 phone = random.choice(self.normal_pool)
                 is_voip = random.random() < 0.08
                 caller_country = random.choice(self.countries)
                 duration = random.randint(5, 600)
+                # Normal traffic concentrates in business hours + evening
+                call_hour = random.choices(
+                    population=list(range(24)),
+                    weights=[1, 1, 1, 1, 1, 1, 2, 4, 8, 10, 10, 10,
+                             8, 10, 10, 10, 10, 8, 9, 9, 6, 4, 2, 1],
+                )[0]
+
+            # Simulated call time within the past 24h at the profile's hour.
+            # Wall-clock must NOT drive this — a demo run at 2am would mark
+            # every caller as a night caller (night_ratio=1.0 across the board).
+            # Day start is computed in LOCAL time: the consumer buckets hours
+            # via datetime.fromtimestamp(); a UTC midnight base (now % 86400)
+            # shifts every profile by the UTC offset (+8h here 把深夜平移成上班時段).
+            now = time.time()
+            lt = time.localtime(now)
+            day_start = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 0, 0, 0, 0, 0, -1))
+            call_ts = day_start + call_hour * 3600 + random.randint(0, 3599)
+            if call_ts > now:
+                call_ts -= 86400
 
             event = CallEvent(
                 event_id=f"evt_{self._event_counter:08d}",
@@ -96,7 +119,7 @@ class SimulatedKafkaProducer:
                 callee_country="TW",
                 call_duration_sec=duration,
                 is_voip=is_voip,
-                timestamp=time.time(),
+                timestamp=call_ts,
                 device_fingerprint=hashlib.md5(phone.encode()).hexdigest()[:12],
             )
             yield event
@@ -144,5 +167,55 @@ def run_demo() -> dict:
     return summary
 
 
+def run_publish(broker: str, n_events: int = 5000, rate: float = None) -> dict:
+    """
+    Publish simulated events to a real Kafka broker.
+
+    rate: events/sec pacing. Without it the producer bursts everything at
+    once and downstream end-to-end latency measures queue backlog, not the
+    pipeline (實測 burst 模式 e2e p50 會被推到秒級).
+    """
+    from confluent_kafka import Producer
+
+    random.seed(SEED)
+    sim = SimulatedKafkaProducer()
+    producer = Producer({"bootstrap.servers": broker})
+
+    interval = 1.0 / rate if rate else 0.0
+    published = 0
+    t0 = time.perf_counter()
+    for event in sim.generate_events(n_events):
+        # Stamp at publish time so downstream end-to-end latency is real
+        # (call-time `timestamp` stays simulated — it drives features)
+        event.produced_at = time.time()
+        producer.produce(sim.TOPIC, value=event.to_json())
+        published += 1
+        producer.poll(0)
+        if interval:
+            next_at = t0 + published * interval
+            sleep_for = next_at - time.perf_counter()
+            if sleep_for > 0:
+                time.sleep(sleep_for)
+    producer.flush(timeout=30)
+    elapsed = time.perf_counter() - t0
+
+    logger.info(f"📤 Published {published} events to '{sim.TOPIC}' @ {broker} "
+                f"in {elapsed:.2f}s ({published / elapsed:,.0f} ev/s)")
+    return {"topic": sim.TOPIC, "events_published": published,
+            "elapsed_s": round(elapsed, 2)}
+
+
 if __name__ == "__main__":
-    run_demo()
+    import argparse
+    parser = argparse.ArgumentParser(description="Archangel call-event producer")
+    parser.add_argument("--broker", default=None,
+                        help="Kafka bootstrap server (e.g. localhost:9092); omit to simulate")
+    parser.add_argument("--n-events", type=int, default=5000)
+    parser.add_argument("--rate", type=float, default=None,
+                        help="events/sec pacing; omit to burst")
+    args = parser.parse_args()
+
+    if args.broker:
+        run_publish(args.broker, args.n_events, args.rate)
+    else:
+        run_demo()

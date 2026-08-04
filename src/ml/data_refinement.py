@@ -7,7 +7,6 @@ This is the core "Data-centric AI" module — improving data quality
 rather than tuning model hyperparameters. Aligned with ISL philosophy
 of systematic dataset refinement over raw data accumulation.
 
-Role Target: Data Research Engineer @ Gogolook ISL
 """
 
 import numpy as np

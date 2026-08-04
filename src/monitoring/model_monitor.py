@@ -9,7 +9,6 @@ A model trained 3 months ago may be blind to new attack vectors.
 This module detects when the current model has degraded and triggers
 the retraining pipeline — forming a closed feedback loop.
 
-Role Target: Data Research Engineer @ Gogolook ISL
 """
 
 import math

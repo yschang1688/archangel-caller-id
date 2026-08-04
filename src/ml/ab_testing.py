@@ -13,7 +13,6 @@ Key Design Principles (aligned with ISL Data-centric AI philosophy):
     - Sequential testing support (no peeking problem)
     - Business-interpretable output for PM stakeholders
 
-Role Target: Data Research Engineer @ Gogolook ISL
 """
 
 import math

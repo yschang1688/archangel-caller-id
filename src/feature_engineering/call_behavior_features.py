@@ -10,7 +10,7 @@ Feature categories:
     4. Social graph (unique callees, reciprocity ratio)
     5. Report-based (report density, Guardian Score weighted reports)
 
-Portfolio: Caller-ID & Anti-Fraud Data Platform
+Caller-ID & Anti-Fraud Data Platform — behavioral feature extraction.
 """
 
 import math

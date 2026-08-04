@@ -11,7 +11,6 @@ Endpoints:
     GET  /api/v1/health         — Service health check
     GET  /api/v1/stats          — Pipeline statistics
 
-Role Target: Data Research Engineer @ Gogolook ISL
 """
 
 from fastapi import FastAPI, HTTPException
@@ -348,14 +347,40 @@ async def submit_report(req: ReportRequest):
     )
 
 
+def _redis_blacklist() -> dict | None:
+    """
+    Read the stream-maintained blacklist from Redis
+    (written by src/streaming/blacklist_stream.py).
+    Returns None when Redis is unreachable — caller falls back to in-memory.
+    """
+    try:
+        import redis as redis_lib
+        client = redis_lib.Redis(
+            host=os.environ.get("REDIS_HOST", "localhost"),
+            port=int(os.environ.get("REDIS_PORT", "6379")),
+            decode_responses=True, socket_connect_timeout=0.5,
+        )
+        entries = client.hgetall("archangel:blacklist")
+        return {phone: float(proba) for phone, proba in entries.items()}
+    except Exception:
+        return None
+
+
 @app.get("/api/v1/blacklist")
 async def get_blacklist():
-    """Get current blacklist candidates based on Guardian Score consensus."""
+    """
+    Blacklist candidates from two sources:
+    - candidates: in-memory Guardian Score weighted consensus
+    - stream_blacklist: Redis blacklist written by the Kafka stream processor
+    """
     engine = _get_guardian_engine()
-    candidates = engine.get_blacklist_candidates()
+    consensus = engine.get_blacklist_candidates()
+    stream = _redis_blacklist()
     return {
-        "count": len(candidates),
-        "candidates": candidates,
+        "count": len(consensus) + (len(stream) if stream else 0),
+        "candidates": consensus,
+        "stream_blacklist": stream if stream is not None else {},
+        "stream_source": "redis" if stream is not None else "unavailable",
     }
 
 

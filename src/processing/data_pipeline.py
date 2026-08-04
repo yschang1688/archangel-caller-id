@@ -8,7 +8,6 @@ Supports TWO dataset schemas automatically:
   • label_1000_dataset.csv  — legacy schema (Tags, Transaction_Amount, Is_Fraud…)
   • label_100000_dataset.csv — production schema (Financial_Loss, Age_Group, Label…)
 
-Role Target: Data Research Engineer @ Gogolook ISL
 """
 
 import os

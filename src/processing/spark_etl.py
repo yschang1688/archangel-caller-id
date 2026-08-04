@@ -7,7 +7,6 @@ In global anti-fraud scenarios, certain phone numbers (e.g., scam call centers)
 generate extreme query hotspots — a classic Data Skew problem. This module
 demonstrates production-grade solutions.
 
-Role Target: Data Research Engineer @ Gogolook ISL
 """
 
 import hashlib
