@@ -13,7 +13,7 @@
 
 ## Project Overview
 
-An end-to-end **Data Engineering & Machine Learning pipeline** simulating a global anti-fraud intelligence platform. Built to demonstrate production-grade data engineering skills aligned with **Data-centric AI** principles — processing 1B+ call records with real-time scam detection, rigorous A/B testing, and automated model monitoring.
+An end-to-end **Data Engineering & Machine Learning pipeline** simulating a global anti-fraud intelligence platform, built on **Data-centric AI** principles — a Spark pipeline designed to scale to 1B+ call records, with scam detection, rigorous A/B testing, and automated model monitoring.
 
 > 來電事件資料 → 即時詐騙偵測 + PSI 漂移監控 + A/B 驗證的版本迭代；一條通用的設備資料閉環管線（設備數據回傳 → 異常偵測 → 版本迭代）。
 > Call-event data → real-time scam detection + PSI drift monitoring + A/B-validated model iteration. A generic device-data closed-loop pipeline (telemetry ingest → anomaly detection → versioned iteration).
@@ -24,23 +24,31 @@ An end-to-end **Data Engineering & Machine Learning pipeline** simulating a glob
 
 ## System Architecture
 
+As implemented in this repo — every box maps to a file you can open:
+
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         ARCHANGEL DATA PIPELINE                      │
-│                                                                       │
-│  [Call Events] ──► [Kafka Ingestion] ──► [Flink Stream] ──► [Redis] │
-│       │                                        │                      │
-│  [SMS Events]                          [Dynamic Blacklist]            │
-│       │                                                               │
-│  [User Reports] ──► [Spark Batch ETL] ──► [ScyllaDB / BigQuery]     │
-│                              │                      │                 │
-│                    [Feature Engineering]    [Model Training]          │
-│                              │                      │                 │
-│                    [Guardian Score]        [MLflow Tracking]          │
-│                              │                                        │
-│                    [A/B Testing Framework] ──► [Decision Engine]     │
-└─────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│                   ARCHANGEL DATA PIPELINE (implemented)              │
+│                                                                      │
+│  [Call/SMS Events] ──► [kafka_producer.py] ──► [spark_etl.py]        │
+│  (simulated stream)    (event generator)    (Spark batch ETL+Salting)│
+│                                                      │               │
+│            [fcc_data_pipeline.py — 20 engineered features]           │
+│                       │                              │               │
+│         [guardian_score.py]              [SVM / XGBoost training]    │
+│         (Bayesian reputation)            [MLflow tracking]           │
+│                       │                              │               │
+│         [ab_testing.py]                  [model_monitor.py]          │
+│         (z-test + Cohen's d)             (PSI drift → retrain)       │
+│                       └────────────┬─────────────────┘               │
+│                [detection_api.py — FastAPI serving]                  │
+│                (in-memory state; Redis wiring planned)               │
+└──────────────────────────────────────────────────────────────────────┘
 ```
+
+Runtime infra via `docker-compose.yml` (9 services): Zookeeper, Kafka, Kafka-UI, Redis, Redis-Insight, MLflow, the FastAPI app, and a Spark master/worker pair.
+
+> **Scope note** — the streaming layer is simulated: `kafka_producer.py` generates the event stream in-process, and `detection_api.py` keeps blacklist state in memory. A Flink-based real-time path is a design target, not part of this codebase — see [Roadmap](#roadmap-designed-not-implemented).
 
 ---
 
@@ -51,7 +59,7 @@ An end-to-end **Data Engineering & Machine Learning pipeline** simulating a glob
 | **Data Skew Handling** | Spark Salting + Repartitioning | Synthetic demo 101.76x → 2.21x; real FCC data 442.34x → 1.31x |
 | **Guardian Score** | Bayesian Beta Distribution Reputation | Weighted consensus blacklisting |
 | **A/B Testing Framework** | Frequentist z-test + Cohen's d | p=0.0003, CI=[0.012, 0.040] |
-| **Real-time Blacklist** | Kafka → Flink → Redis pipeline | <50ms detection latency |
+| **Detection API** | FastAPI serving + Guardian-consensus blacklist (`detection_api.py`) | SVM inference <0.057ms/record |
 | **Dataset Engineering** | SMOTE + cleanlab label correction | Data-centric AI refinement |
 | **Model Monitoring** | PSI drift detection + auto-retraining | PSI=0.163 → CRITICAL → auto-retrain |
 
@@ -206,7 +214,7 @@ All results above are **reproducible** with `python run_demo.py`.
 - Population Stability Index (PSI) for distribution drift detection
 - 30-day simulation with gradual drift + sudden scam wave
 - Auto-retraining trigger via structured Kubeflow pipeline call
-- Latency SLA monitoring (p99 < 50ms)
+- Latency SLA gate: alerts when p99 exceeds the 50ms threshold (`LATENCY_SLA_MS`) — a monitoring rule, not a measured serving latency
 
 ### 5. Bayesian Reputation (guardian_score.py)
 - Beta distribution for user accuracy estimation
@@ -233,5 +241,16 @@ All results above are **reproducible** with `python run_demo.py`.
 
 ---
 
-*Built as a portfolio demonstration of Data-centric AI engineering principles.*
+## Roadmap (designed, not implemented)
+
+These components appear in the original system design but are **not in this codebase** — listed here so the architecture above stays verifiable file-by-file:
+
+- **Flink streaming layer** — a real-time Kafka → Flink → Redis blacklist path targeting <50ms end-to-end detection. Today the stream is simulated by `kafka_producer.py`, and the 50ms figure exists only as the monitoring SLA threshold (`LATENCY_SLA_MS`) in `model_monitor.py`.
+- **Redis-backed API state** — `detection_api.py` currently keeps blacklist/report state in memory; the Redis service in `docker-compose.yml` is provisioned but not yet wired into the API.
+- **ScyllaDB / BigQuery storage** — batch ETL output currently lands in local files.
+- **Real Kafka publishing** — `kafka_producer.py` simulates the `call-events` topic in-process; confluent_kafka wiring is the production path.
+
+---
+
+*A demonstration project for Data-centric AI engineering principles.*
 *All results are deterministic and reproducible with `python run_demo.py` (seed=42).*
