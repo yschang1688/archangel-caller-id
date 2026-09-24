@@ -1,0 +1,21 @@
+name: tests
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install numpy scipy pandas scikit-learn joblib pytest
+      # 4 則端到端串流測試需要先以 run_ml_dev.py 訓練出的 SVM 模型檔（依賴 FCC 原始資料下載），
+      # CI 不重訓，這 4 則會 skip 並在報告中列出原因（-rs），不當成通過。
+      - run: python -m pytest tests/ -q -rs
